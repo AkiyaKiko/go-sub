@@ -1,0 +1,166 @@
+name: Release (Tag)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: gosub
+
+jobs:
+  build-web:
+    name: Build Web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: web
+        run: pnpm build
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/**
+          if-no-files-found: error
+
+  build-binaries:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: build-web
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download web dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Normalize web dist path
+        run: |
+          set -euo pipefail
+          if [ -d web/dist/dist ]; then
+            cp -a web/dist/dist/. web/dist/
+            rm -rf web/dist/dist
+          fi
+          test -f web/dist/index.html
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "${GOOS}" = "windows" ]; then
+            ext=".exe"
+          fi
+          bin_name="${APP_NAME}_${GOOS}_${GOARCH}${ext}"
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w" -o "dist/${bin_name}" .
+
+      - name: Package release artifact
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "${GOOS}" = "windows" ]; then
+            ext=".exe"
+          fi
+          bin_name="${APP_NAME}_${GOOS}_${GOARCH}${ext}"
+          archive_base="${APP_NAME}_${GOOS}_${GOARCH}"
+
+          mkdir -p package release
+          cp "dist/${bin_name}" package/
+          cp config.example.json package/
+          cp README.md package/
+
+          if [ "${GOOS}" = "windows" ]; then
+            cd package
+            zip -r "../release/${archive_base}.zip" .
+          else
+            tar -czf "release/${archive_base}.tar.gz" -C package .
+          fi
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish Official Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: false
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
