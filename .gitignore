@@ -1,0 +1,33 @@
+# Build outputs
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+*.test
+
+# Go cache
+.gocache/
+
+# Runtime config (contains credentials)
+config.json
+
+# Frontend artifacts
+web/node_modules/
+web/dist/
+web/.vite/
+web/.pnpm-store/
+web/*.tsbuildinfo
+
+# Logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

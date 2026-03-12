@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "host": "0.0.0.0",
+    "port": 12345,
+    "path": "/changeMePath",
+    "admin": "admin",
+    "password": "changeMePassword",
+    "tls": {
+      "enabled": false,
+      "certFile": "",
+      "keyFile": ""
+    }
+  },
+  "nodes": [
+    "vless://example.com:443?path=/abc&tls=1",
+    "vmess://example.com:443?path=/abc&tls=1",
+    "ss://example.com:443?path=/abc&tls=1"
+  ]
+}
