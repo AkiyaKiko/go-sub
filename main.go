@@ -51,9 +51,9 @@ func InitializeConfig() {
 		log.Fatal(fmt.Errorf("stat config.json failed: %w", err))
 	}
 
-	f, f_err := os.Open(CONFIG_PATH)
-	if f_err != nil {
-		log.Fatal(fmt.Errorf("failed to open config.json: %w", f_err))
+	f, fErr := os.Open(CONFIG_PATH)
+	if fErr != nil {
+		log.Fatal(fmt.Errorf("failed to open config.json: %w", fErr))
 	}
 	defer f.Close()
 
@@ -101,7 +101,7 @@ func main() {
 
 	if settings.TLS.Enabled {
 		log.Printf("Starting server at https://%s%s", addr, settings.Path)
-		log.Fatal(http.ListenAndServeTLS(addr, settings.TLS.CertFile, settings.TLS.KeyFile, root))
+		log.Fatal(ListenAndServeTLSWithSamePortRedirect(addr, settings.TLS.CertFile, settings.TLS.KeyFile, root))
 	} else {
 		log.Printf("Starting server at http://%s%s", addr, settings.Path)
 		log.Fatal(http.ListenAndServe(addr, root))

@@ -27,7 +27,7 @@ gosub/
 ## 3. 环境要求
 
 - Go：`go.mod` 当前声明 `go 1.25.6`
-- Node.js：建议 20+
+- Node.js：建议 24+
 - pnpm：用于前端依赖管理
 
 ## 4. 配置文件说明（config.json）
