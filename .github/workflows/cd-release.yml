@@ -66,6 +66,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Generate templ
+        env:
+          GOOS: ""
+          GOARCH: ""
+        run: go run github.com/a-h/templ/cmd/templ generate
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -73,7 +79,6 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
-          go run github.com/a-h/templ/cmd/templ generate
           ext=""
           if [ "${GOOS}" = "windows" ]; then
             ext=".exe"
