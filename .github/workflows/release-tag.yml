@@ -16,43 +16,27 @@ env:
   APP_NAME: gosub
 
 jobs:
-  build-web:
-    name: Build Web
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          version: 10
+          go-version-file: go.mod
+          cache: true
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Test
+        run: |
+          go run github.com/a-h/templ/cmd/templ generate
+          go test ./...
 
-      - name: Install frontend dependencies
-        working-directory: web
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        working-directory: web
-        run: pnpm build
-
-      - name: Upload web dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist/**
-          if-no-files-found: error
-
-  build-binaries:
+  build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: build-web
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -75,25 +59,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download web dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-
-      - name: Normalize web dist path
-        run: |
-          set -euo pipefail
-          if [ -d web/dist/dist ]; then
-            cp -a web/dist/dist/. web/dist/
-            rm -rf web/dist/dist
-          fi
-          test -f web/dist/index.html
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
       - name: Build binary
         env:
@@ -102,6 +72,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
+          go run github.com/a-h/templ/cmd/templ generate
           ext=""
           if [ "${GOOS}" = "windows" ]; then
             ext=".exe"
@@ -144,7 +115,7 @@ jobs:
 
   release:
     name: Publish Official Release
-    needs: build-binaries
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Download all packaged artifacts

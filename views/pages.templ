@@ -1,0 +1,141 @@
+package views
+
+import (
+	"fmt"
+
+	"git.local/gosub/lib"
+)
+
+type LoginData struct {
+	Message string
+}
+
+type DashboardData struct {
+	Settings         *lib.Settings
+	SubscriptionPath string
+	SubscriptionURL  string
+	NodesText        string
+	NodeCount        int
+	Message          string
+}
+
+templ LoginPage(data LoginData) {
+	<!doctype html>
+	<html lang="zh-CN">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>gosub 登录</title>
+			<link rel="stylesheet" href="/assets/app.css"/>
+			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+		</head>
+		<body>
+			<main class="login-shell">
+				<section class="login-panel">
+					<h1 class="title">gosub 管理后台</h1>
+					<p class="subtitle">本地订阅服务</p>
+					if data.Message != "" {
+						<p class="message">{ data.Message }</p>
+					}
+					<form class="form-grid" method="post" action="/login">
+						<label>
+							<span class="label">用户名</span>
+							<input name="username" autocomplete="username" required/>
+						</label>
+						<label>
+							<span class="label">密码</span>
+							<input name="password" type="password" autocomplete="current-password" required/>
+						</label>
+						<button class="primary" type="submit">登录</button>
+					</form>
+				</section>
+			</main>
+		</body>
+	</html>
+}
+
+templ DashboardPage(data DashboardData) {
+	<!doctype html>
+	<html lang="zh-CN">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>gosub 管理</title>
+			<link rel="stylesheet" href="/assets/app.css"/>
+			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+		</head>
+		<body>
+			<main class="shell">
+				<header class="topbar">
+					<div>
+						<h1 class="title">代理订阅管理</h1>
+						<p class="subtitle">gosub</p>
+					</div>
+					<form method="post" action="/logout">
+						<button class="ghost" type="submit">退出登录</button>
+					</form>
+				</header>
+				<div id="status">
+					if data.Message != "" {
+						<p class="message">{ data.Message }</p>
+					}
+				</div>
+				<section class="panel">
+					<h2 class="panel-title">当前服务</h2>
+					<div class="info-grid">
+						<div class="info-item">
+							<span class="label">监听地址</span>
+							<div class="value">{ data.Settings.Host }:{ fmt.Sprintf("%d", data.Settings.Port) }</div>
+						</div>
+						<div class="info-item">
+							<span class="label">TLS</span>
+							<div class="value">
+								if data.Settings.TLS != nil && data.Settings.TLS.Enabled {
+									开启
+								} else {
+									关闭
+								}
+							</div>
+						</div>
+						<div class="info-item">
+							<span class="label">订阅链接</span>
+							<div class="value">{ data.SubscriptionURL }</div>
+						</div>
+						<div class="info-item">
+							<span class="label">订阅路径</span>
+							<div class="value">{ data.SubscriptionPath }</div>
+						</div>
+						<div class="info-item">
+							<span class="label">管理员</span>
+							<div class="value">{ data.Settings.Admin }</div>
+						</div>
+					</div>
+				</section>
+				<section class="panel">
+					<h2 class="panel-title">订阅路径</h2>
+					<form class="inline-form" method="post" action="/subscription-path" hx-post="/subscription-path" hx-target="body" hx-swap="outerHTML">
+						<label>
+							<span class="label">路径</span>
+							<input name="path" value={ data.SubscriptionPath } required/>
+						</label>
+						<button class="ghost" type="submit" name="action" value="random">随机并保存</button>
+						<button class="primary" type="submit" name="action" value="save">保存路径</button>
+					</form>
+				</section>
+				<section class="panel">
+					<h2 class="panel-title">订阅连接</h2>
+					<form method="post" action="/nodes" hx-post="/nodes" hx-target="body" hx-swap="outerHTML">
+						<label>
+							<span class="label">节点列表</span>
+							<textarea name="nodes" spellcheck="false">{ data.NodesText }</textarea>
+						</label>
+						<div class="footer-row">
+							<span class="muted">当前共 { fmt.Sprintf("%d", data.NodeCount) } 条连接</span>
+							<button class="primary" type="submit">保存连接</button>
+						</div>
+					</form>
+				</section>
+			</main>
+		</body>
+	</html>
+}

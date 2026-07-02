@@ -1,4 +1,4 @@
-name: CD Release
+name: Build Artifacts
 
 on:
   push:
@@ -7,53 +7,37 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: cd-release-${{ github.ref }}
-  cancel-in-progress: false
+  group: build-artifacts-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   APP_NAME: gosub
 
 jobs:
-  build-web:
-    name: Build Web
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          version: 10
+          go-version-file: go.mod
+          cache: true
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Test
+        run: |
+          go run github.com/a-h/templ/cmd/templ generate
+          go test ./...
 
-      - name: Install frontend dependencies
-        working-directory: web
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        working-directory: web
-        run: pnpm build
-
-      - name: Upload web dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist/**
-          if-no-files-found: error
-
-  build-binaries:
+  build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: build-web
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -76,25 +60,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download web dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-
-      - name: Normalize web dist path
-        run: |
-          set -euo pipefail
-          if [ -d web/dist/dist ]; then
-            cp -a web/dist/dist/. web/dist/
-            rm -rf web/dist/dist
-          fi
-          test -f web/dist/index.html
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
       - name: Build binary
         env:
@@ -103,6 +73,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
+          go run github.com/a-h/templ/cmd/templ generate
           ext=""
           if [ "${GOOS}" = "windows" ]; then
             ext=".exe"
@@ -111,7 +82,7 @@ jobs:
           mkdir -p dist
           go build -trimpath -ldflags "-s -w" -o "dist/${bin_name}" .
 
-      - name: Package release artifact
+      - name: Package artifact
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -136,43 +107,9 @@ jobs:
             tar -czf "release/${archive_base}.tar.gz" -C package .
           fi
 
-      - name: Upload packaged binary
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ env.APP_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: release/*
           if-no-files-found: error
-
-  release:
-    name: Publish Pre-Release
-    needs: build-binaries
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all packaged artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Prepare release metadata
-        id: meta
-        run: |
-          set -euo pipefail
-          short_sha="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          tag="auto-${short_sha}-${GITHUB_RUN_NUMBER}"
-          name="Auto Build ${short_sha} (run ${GITHUB_RUN_NUMBER})"
-
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "name=${name}" >> "${GITHUB_OUTPUT}"
-
-      - name: Publish GitHub Pre-Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.name }}
-          target_commitish: ${{ github.sha }}
-          prerelease: true
-          files: release-assets/*
-          fail_on_unmatched_files: true
-          generate_release_notes: true

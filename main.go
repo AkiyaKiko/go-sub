@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,7 +11,10 @@ import (
 	"git.local/gosub/lib"
 )
 
-const CONFIG_PATH = "config.json"
+const (
+	configPath = "config.json"
+	dbPath     = "gosub.db"
+)
 
 func NewDefaultConfig() *lib.Config {
 	randomStr, err := lib.RandomString(8)
@@ -21,89 +25,92 @@ func NewDefaultConfig() *lib.Config {
 		Settings: &lib.Settings{
 			Host:     "127.0.0.1",
 			Port:     8080,
-			Path:     fmt.Sprintf(`/%v`, randomStr),
-			Admin:    fmt.Sprintf(`admin_%v`, randomStr),
-			Password: fmt.Sprintf(`password_%v`, randomStr),
+			Admin:    fmt.Sprintf("admin_%s", randomStr),
+			Password: fmt.Sprintf("password_%s", randomStr),
 			TLS:      &lib.TLSConfig{Enabled: false},
 		},
-		Nodes: []string{},
 	}
 }
 
-func WriteDefaultConfig(d_cfg *lib.Config) error {
-	encoded, err := lib.EncodeConfig(d_cfg)
+func WriteDefaultConfig(cfg *lib.Config) error {
+	encoded, err := lib.EncodeConfig(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(CONFIG_PATH, encoded, 0644)
+	return os.WriteFile(configPath, encoded, 0644)
 }
 
-func InitializeConfig() {
-	// If not exits, create a default config file and exit
-	_, err := os.Stat(CONFIG_PATH)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if wErr := WriteDefaultConfig(NewDefaultConfig()); wErr != nil {
-				log.Fatal(fmt.Errorf("failed to write default config: %w", wErr))
-			}
-			log.Fatal("Missing config.json! The file has been created but still needs to be edited.")
-		}
-		log.Fatal(fmt.Errorf("stat config.json failed: %w", err))
-	}
+func InitializeRuntime() (*lib.Settings, string) {
+	lib.SetConfigPath(configPath)
 
-	f, fErr := os.Open(CONFIG_PATH)
-	if fErr != nil {
-		log.Fatal(fmt.Errorf("failed to open config.json: %w", fErr))
-	}
-	defer f.Close()
-
-	if err := lib.ParseConfig(f); err != nil {
+	if err := ensureConfigFile(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func main() {
-	lib.SetConfigPath(CONFIG_PATH)
-	InitializeConfig()
+	log.Println("initializing sqlite data")
+	if err := lib.InitializeStore(dbPath); err != nil {
+		log.Fatal(err)
+	}
 
 	settings, err := lib.GetSettings()
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	subMux := lib.GetSubscriptionMuxDynamic()
-	apiMux := lib.GetWebAPIMux()
-	loginMux := lib.GetLoginAPIMux()
-	webHandler, err := NewEmbeddedWebHandler()
+	path, err := lib.GetSubscriptionPath()
 	if err != nil {
-		log.Fatal(fmt.Errorf("failed to initialize embedded web handler: %w", err))
+		log.Fatal(err)
 	}
+	return settings, path
+}
 
-	root := http.NewServeMux()
-	root.Handle("/api/", apiMux)
-	root.Handle("/api/login", loginMux)
-	root.Handle("/api/session", loginMux)
-	root.Handle("/api/logout", loginMux)
-	root.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		currentSettings, err := lib.GetSettings()
-		if err != nil {
-			http.Error(w, "config error", http.StatusInternalServerError)
-			return
+func ensureConfigFile() error {
+	if err := validateConfigFile(); errors.Is(err, os.ErrNotExist) {
+		if err := WriteDefaultConfig(NewDefaultConfig()); err != nil {
+			return fmt.Errorf("failed to write default config: %w", err)
 		}
-		if r.URL.Path == currentSettings.Path {
-			subMux.ServeHTTP(w, r)
-			return
-		}
-		webHandler.ServeHTTP(w, r)
-	}))
+		return validateConfigFile()
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConfigFile() error {
+	f, err := os.Open(configPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = lib.ParseConfig(f)
+	return err
+}
+
+func main() {
+	settings, path := InitializeRuntime()
+	server := NewServer()
+	printStartupInfo(settings, path)
 
 	addr := net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port))
+	if settings.TLS != nil && settings.TLS.Enabled {
+		log.Fatal(ListenAndServeTLSWithSamePortRedirect(addr, settings.TLS.CertFile, settings.TLS.KeyFile, server.Handler()))
+	}
+	log.Fatal(http.ListenAndServe(addr, server.Handler()))
+}
 
-	if settings.TLS.Enabled {
-		log.Printf("Starting server at https://%s%s", addr, settings.Path)
-		log.Fatal(ListenAndServeTLSWithSamePortRedirect(addr, settings.TLS.CertFile, settings.TLS.KeyFile, root))
-	} else {
-		log.Printf("Starting server at http://%s%s", addr, settings.Path)
-		log.Fatal(http.ListenAndServe(addr, root))
+func printStartupInfo(settings *lib.Settings, path string) {
+	webURL, subscriptionURL := startupURLs(settings, path)
+	tlsEnabled := settings.TLS != nil && settings.TLS.Enabled
+
+	log.Println("gosub started")
+	log.Printf("web_url=%s", webURL)
+	log.Printf("subscription_url=%s", subscriptionURL)
+	log.Printf("subscription_path=%s", path)
+	log.Printf("listen=%s", net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port)))
+	log.Printf("admin=%s", settings.Admin)
+	log.Printf("password=%s", settings.Password)
+	log.Printf("tls_enabled=%t", tlsEnabled)
+	if tlsEnabled {
+		log.Printf("tls_cert_file=%s", settings.TLS.CertFile)
+		log.Printf("tls_key_file=%s", settings.TLS.KeyFile)
 	}
 }

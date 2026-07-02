@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 )
 
-func randUserID() (int64, error) {
+func RandUserID() (int64, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return 0, err

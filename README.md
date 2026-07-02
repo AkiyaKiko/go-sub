@@ -1,241 +1,88 @@
 # gosub
 
-一个用 Go + React 实现的代理订阅管理系统。  
-后端提供订阅内容分发和管理 API，前端提供登录后的管理界面（修改订阅路径、编辑全部节点连接）。
+gosub 是一个本地代理订阅管理服务。当前技术栈为 Gin + GORM + templ + htmx，SQLite 只保存订阅数据。
 
-## 1. 功能概览
+## 功能
 
-- 订阅分发：按 `config.json` 里的 `settings.path` 暴露订阅地址。
-- 节点编码：将 `nodes` 按行拼接后做 Base64 输出。
-- 管理登录：用户名密码登录，基于 `session_id` Cookie 会话鉴权。
-- 配置管理：登录后可读取当前配置、修改订阅路径、修改节点列表。
-- 配置持久化：管理修改会写回 `config.json`。
-- 单文件部署：前端 `web/dist` 可通过 Go `embed` 打包进单个可执行文件。
+- 订阅分发：访问 SQLite 中保存的订阅路径时返回 Base64 编码后的节点列表。
+- 管理后台：登录后可编辑订阅路径和订阅节点。
+- 配置文件：`config.json` 管理 host、port、admin、password、TLS。
+- 本地存储：`gosub.db` 保存订阅路径和节点列表。
+- 暗色模式：前端默认跟随系统设置。
 
-## 2. 目录结构
+## 目录结构
 
 ```txt
 gosub/
-├─ web_embed.go           # 将 web/dist 内嵌进可执行文件
-├─ build.ps1              # 一键打包脚本（先构建前端再构建 Go）
-├─ main.go                # 后端入口
-├─ config.json            # 运行配置
-├─ lib/                   # 后端核心逻辑（API、会话、配置读写）
-└─ web/                   # React 管理前端（Vite）
+├─ main.go                    # 启动、配置初始化、启动信息输出
+├─ server.go                  # Gin 路由、API、htmx 表单处理
+├─ views/                     # templ 页面
+├─ assets/                    # CSS
+├─ lib/                       # 配置、SQLite/GORM store、session、订阅编码
+├─ .github/workflows/         # push 构建产物与 tag release
+├─ build.ps1                  # Windows 本地构建脚本
+├─ config.example.json        # 配置模板
+└─ go.mod
 ```
 
-## 3. 环境要求
+## 配置与数据
 
-- Go：`go.mod` 当前声明 `go 1.25.6`
-- Node.js：建议 24+
-- pnpm：用于前端依赖管理
+运行时文件：
 
-## 4. 配置文件说明（config.json）
+- `config.json`：运行配置，包含监听地址、端口、管理员账号密码、TLS 配置。
+- `gosub.db`：SQLite 数据库，保存订阅路径和订阅节点。
 
-首次使用建议先复制模板：
+启动逻辑：
 
-```powershell
-Copy-Item config.example.json config.json
-```
+1. 如果 `config.json` 不存在，程序会生成默认配置并继续启动。
+2. 如果 `gosub.db` 不存在，程序会创建数据库并生成随机订阅路径。
+3. 每次启动都会在控制台输出管理后台 URL、订阅 URL、订阅 path、管理员账号密码、监听地址和 TLS 状态。
 
-示例：
+`config.json` 中的旧 `settings.path` 和 `nodes` 字段会被忽略。订阅路径和节点请在管理后台修改，或通过 API 写入 SQLite。
 
-```json
-{
-  "settings": {
-    "host": "0.0.0.0",
-    "port": 12345,
-    "path": "/cdJkuId",
-    "admin": "admin",
-    "password": "password",
-    "tls": {
-      "enabled": false,
-      "certFile": "",
-      "keyFile": ""
-    }
-  },
-  "nodes": [
-    "vless://example.com:443?path=/abc&tls=1",
-    "vmess://example.com:443?path=/abc&tls=1",
-    "ss://example.com:443?path=/abc&tls=1"
-  ]
-}
-```
-
-字段说明：
-
-- `settings.host`：监听地址，仅允许 `localhost` / `127.0.0.1` / `0.0.0.0` / `::` / `::1`
-- `settings.port`：监听端口
-- `settings.path`：订阅路径（必须以 `/` 开头）
-- `settings.admin`：管理账号
-- `settings.password`：管理密码
-- `settings.tls.enabled`：是否启用 HTTPS
-- `settings.tls.certFile` / `keyFile`：启用 TLS 时必须填写证书路径
-- `nodes`：订阅节点列表（每项一条连接）
-
-注意：
-
-- 如果 `config.json` 不存在，后端会自动生成默认文件并退出一次，需先编辑后再重启。
-- 请务必修改默认管理员密码。
-- 仓库中建议只提交 `config.example.json`，不要提交真实 `config.json`。
-
-## 5. 启动后端
-
-在项目根目录执行：
+## 启动
 
 ```powershell
 go run .
 ```
 
-启动成功后，日志会打印类似：
+启动后访问：
 
-- `Starting server at http://HOST:PORT/PATH`
-- 或 `Starting server at https://HOST:PORT/PATH`
+- `/`：管理后台
+- `/login`：登录页
+- `{subscription_path}`：订阅地址
+- `/api/*`：JSON API
 
-订阅地址即：`http(s)://host:port + settings.path`
+## API
 
-同时：
+所有管理 API 都使用 `session_id` Cookie 鉴权。
 
-- 访问 `/` 会返回内嵌的管理前端页面
-- 访问 `/api/*` 为管理 API
-- 访问 `settings.path` 返回订阅 Base64 内容
-
-## 6. 启动管理前端（开发模式）
-
-进入前端目录并安装依赖：
-
-```powershell
-cd web
-pnpm install
-pnpm dev
-```
-
-说明：
-
-- 前端开发服务器默认通过 `vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8080`。
-- 如果后端不是跑在 `127.0.0.1:8080`，请修改 `web/vite.config.ts` 的 `server.proxy`。
-
-## 7. 管理前端使用流程
-
-1. 打开前端页面，输入 `config.json` 的 `settings.admin` / `settings.password` 登录。
-2. 登录后会自动读取当前配置：
-   - 服务地址、TLS 状态、完整订阅 URL
-   - 当前节点总数
-3. 修改“订阅路径”并保存。
-4. 在“全部订阅连接”文本框按行编辑节点并保存。
-5. 退出登录可清除当前会话。
-
-## 8. API 说明
-
-所有管理 API 均在同一服务下，登录后通过 Cookie 鉴权。
-
-### 8.1 登录与会话
-
-- `POST /api/login`
-  - 表单参数：`username`、`password`
-  - 成功：`200`，并设置 `session_id` Cookie
+- `POST /api/login`：表单参数 `username`、`password`
 - `GET /api/session`
-  - 需登录
-  - 成功：`200`，返回当前登录状态和 `user_id`
 - `POST /api/logout`
-  - 需登录
-  - 成功：`200`，清理 session
-
-### 8.2 管理配置
-
 - `GET /api/config`
-  - 需登录
-  - 返回当前 `settings`、`nodes`、`subscription_url`
-- `POST /api/change_uri`
-  - 需登录
-  - 表单参数：`uri`（必须以 `/` 开头）
-- `POST /api/change_nodes`
-  - 需登录
-  - 表单参数：`nodes`（可重复传多次）
+- `POST /api/change_uri`：表单参数 `uri`，写入 SQLite 中的订阅路径
+- `POST /api/change_nodes`：可重复表单参数 `nodes`
+- `GET {subscription_path}`：返回 Base64 订阅文本
 
-### 8.3 订阅分发
+## 构建
 
-- `GET {settings.path}`
-  - 返回 Base64 文本（由 `nodes` 按换行拼接后编码）
-
-## 9. API 调用示例（curl）
-
-登录并保存 Cookie：
-
-```bash
-curl -i -c cookie.txt -X POST "http://127.0.0.1:12345/api/login" \
-  -d "username=admin" \
-  -d "password=password"
-```
-
-读取管理配置：
-
-```bash
-curl -b cookie.txt "http://127.0.0.1:12345/api/config"
-```
-
-修改订阅路径：
-
-```bash
-curl -i -b cookie.txt -X POST "http://127.0.0.1:12345/api/change_uri" \
-  -d "uri=/new-sub-path"
-```
-
-修改节点列表：
-
-```bash
-curl -i -b cookie.txt -X POST "http://127.0.0.1:12345/api/change_nodes" \
-  -d "nodes=vless://node-1" \
-  -d "nodes=vmess://node-2"
-```
-
-退出登录：
-
-```bash
-curl -i -b cookie.txt -X POST "http://127.0.0.1:12345/api/logout"
-```
-
-## 10. 打包为单个可执行文件（含前端）
-
-方式 A：一键脚本（Windows PowerShell）
+Windows:
 
 ```powershell
 .\build.ps1
 ```
 
-执行后会自动：
+通用:
 
-1. 构建前端 `web/dist`
-2. 使用 Go 编译 `gosub.exe`（已内嵌前端资源）
-
-方式 B：手动执行
-
-```powershell
-cd web
-pnpm build
-cd ..
-go build -trimpath -ldflags "-s -w" -o gosub.exe .
+```bash
+go run github.com/a-h/templ/cmd/templ generate
+go build -trimpath -ldflags "-s -w" -o gosub .
 ```
 
-说明：
+## CI/CD
 
-- `web_embed.go` 使用 `//go:embed web/dist`，所以 **Go 编译前必须先存在 `web/dist`**。
-- 最终只需分发 `gosub.exe` + `config.json` 两个文件即可运行。
+- `.github/workflows/cd-release.yml`：每次 push 到分支都会运行测试、构建 linux/windows/darwin 的 amd64/arm64 产物，并上传 Actions artifacts。
+- `.github/workflows/release-tag.yml`：push `v*` tag 时构建同样的产物，并发布 GitHub Release。
 
-## 11. 常见问题
-
-- 登录成功但前端仍未登录：
-  - 检查是否请求到了正确后端端口。
-  - 检查浏览器请求是否带上 Cookie（前端已使用 `credentials: include`）。
-- 前端调用接口失败（开发模式）：
-  - 检查 `web/vite.config.ts` 里的代理目标是否与后端实际地址一致。
-- 配置改了但重启后丢失：
-  - 确认进程对 `config.json` 有写权限。
-- `go build` 报嵌入资源相关错误：
-  - 先执行 `cd web && pnpm build`，确保 `web/dist` 已生成。
-
-## 12. 生产环境建议
-
-- 启用 TLS，避免明文传输管理密码和会话 Cookie。
-- 将 `admin/password` 设为强密码，并限制管理端访问来源。
-- 在反向代理层增加访问日志、限流和基础防护。
+SQLite driver 使用纯 Go 实现，CI 中保持 `CGO_ENABLED=0` 跨平台构建。
