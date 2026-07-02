@@ -1,4 +1,4 @@
-name: Build Artifacts
+name: CI
 
 on:
   push:
@@ -10,11 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-artifacts-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  APP_NAME: gosub
 
 jobs:
   test:
@@ -34,87 +31,3 @@ jobs:
         run: |
           go run github.com/a-h/templ/cmd/templ generate
           go test ./...
-
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Generate templ
-        env:
-          GOOS: ""
-          GOARCH: ""
-        run: go run github.com/a-h/templ/cmd/templ generate
-
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          set -euo pipefail
-          ext=""
-          if [ "${GOOS}" = "windows" ]; then
-            ext=".exe"
-          fi
-          bin_name="${APP_NAME}_${GOOS}_${GOARCH}${ext}"
-          mkdir -p dist
-          go build -trimpath -ldflags "-s -w" -o "dist/${bin_name}" .
-
-      - name: Package artifact
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          set -euo pipefail
-          ext=""
-          if [ "${GOOS}" = "windows" ]; then
-            ext=".exe"
-          fi
-          bin_name="${APP_NAME}_${GOOS}_${GOARCH}${ext}"
-          archive_base="${APP_NAME}_${GOOS}_${GOARCH}"
-
-          mkdir -p package release
-          cp "dist/${bin_name}" package/
-          cp config.example.json package/
-          cp README.md package/
-
-          if [ "${GOOS}" = "windows" ]; then
-            cd package
-            zip -r "../release/${archive_base}.zip" .
-          else
-            tar -czf "release/${archive_base}.tar.gz" -C package .
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: release/*
-          if-no-files-found: error
