@@ -30,9 +30,7 @@ jobs:
           cache: true
 
       - name: Test
-        run: |
-          go run github.com/a-h/templ/cmd/templ generate
-          go test ./...
+        run: go test ./...
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}

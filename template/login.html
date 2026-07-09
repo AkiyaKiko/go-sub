@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>gosub 登录</title>
+    <link rel="stylesheet" href="/assets/app.css"/>
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="login-panel">
+        <h1 class="title">gosub 管理后台</h1>
+        <p class="subtitle">本地订阅服务</p>
+        {{if .Message}}
+          <p class="message">{{.Message}}</p>
+        {{end}}
+        <form class="form-grid" method="post" action="/login">
+          <label>
+            <span class="label">用户名</span>
+            <input name="username" autocomplete="username" required/>
+          </label>
+          <label>
+            <span class="label">密码</span>
+            <input name="password" type="password" autocomplete="current-password" required/>
+          </label>
+          <button class="primary" type="submit">登录</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

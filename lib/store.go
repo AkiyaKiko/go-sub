@@ -1,20 +1,25 @@
 package lib
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"git.local/gosub/model"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 const subscriptionRecordID uint = 1
+const DefaultRouteRuleJSON = "{\n  \"rules\": []\n}"
+const maxRouteRuleJSONBytes = 512 * 1024
 
 var (
 	defaultStoreMu sync.RWMutex
@@ -25,27 +30,19 @@ type Store struct {
 	db *gorm.DB
 }
 
-type nodeRecord struct {
-	ID        uint `gorm:"primaryKey"`
-	Value     string
-	Position  int `gorm:"index"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+func (s *Store) Close() error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
-func (nodeRecord) TableName() string {
-	return "nodes"
-}
-
-type subscriptionRecord struct {
-	ID        uint `gorm:"primaryKey"`
-	Path      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-func (subscriptionRecord) TableName() string {
-	return "subscription"
+type RouteRuleSnapshot struct {
+	ID      uint   `json:"id"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 func InitializeStore(dbPath string) error {
@@ -73,8 +70,11 @@ func OpenStore(dbPath string) (*Store, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	if err := db.AutoMigrate(&subscriptionRecord{}, &nodeRecord{}); err != nil {
+	if err := db.AutoMigrate(&model.Subscription{}, &model.Node{}, &model.RouteRule{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite database: %w", err)
+	}
+	if err := restrictFileMode(dbPath); err != nil {
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
@@ -89,13 +89,13 @@ func DefaultStore() (*Store, error) {
 	defaultStoreMu.RLock()
 	defer defaultStoreMu.RUnlock()
 	if defaultStore == nil {
-		return nil, fmt.Errorf("store not initialized")
+		return nil, fmt.Errorf("数据库还没有初始化")
 	}
 	return defaultStore, nil
 }
 
 func (s *Store) Nodes() ([]string, error) {
-	var records []nodeRecord
+	var records []model.Node
 	if err := s.db.Order("position ASC, id ASC").Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("load nodes: %w", err)
 	}
@@ -109,11 +109,11 @@ func (s *Store) Nodes() ([]string, error) {
 func (s *Store) ReplaceNodes(nodes []string) error {
 	nodes = NormalizeNodes(nodes)
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("1 = 1").Delete(&nodeRecord{}).Error; err != nil {
+		if err := tx.Where("1 = 1").Delete(&model.Node{}).Error; err != nil {
 			return fmt.Errorf("delete old nodes: %w", err)
 		}
 		for i, value := range nodes {
-			node := &nodeRecord{Value: value, Position: i}
+			node := &model.Node{Value: value, Position: i}
 			if err := tx.Create(node).Error; err != nil {
 				return fmt.Errorf("save node %d: %w", i+1, err)
 			}
@@ -138,11 +138,10 @@ func (s *Store) EnsureSubscriptionPath() (string, bool, error) {
 		return path, true, nil
 	}
 
-	random, err := RandomString(8)
+	path, err = RandomPublicPath()
 	if err != nil {
 		return "", false, err
 	}
-	path = "/" + random
 	if err := s.UpdateSubscriptionPath(path); err != nil {
 		return "", false, err
 	}
@@ -167,7 +166,7 @@ func (s *Store) legacySubscriptionPath() (string, bool) {
 }
 
 func (s *Store) SubscriptionPath() (string, error) {
-	var record subscriptionRecord
+	var record model.Subscription
 	if err := s.db.First(&record, subscriptionRecordID).Error; err != nil {
 		return "", err
 	}
@@ -179,11 +178,148 @@ func (s *Store) UpdateSubscriptionPath(path string) error {
 	if err := ValidateSubscriptionPath(path); err != nil {
 		return err
 	}
-	record := &subscriptionRecord{ID: subscriptionRecordID, Path: path}
+	if err := s.validatePathNotUsedByRouteRule(path, 0); err != nil {
+		return err
+	}
+	record := &model.Subscription{ID: subscriptionRecordID, Path: path}
 	if err := s.db.Save(record).Error; err != nil {
 		return fmt.Errorf("save subscription path: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) RouteRules() ([]RouteRuleSnapshot, error) {
+	var records []model.RouteRule
+	if err := s.db.Order("id ASC").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("load route rules: %w", err)
+	}
+	rules := make([]RouteRuleSnapshot, 0, len(records))
+	for _, record := range records {
+		rules = append(rules, routeRuleSnapshot(record))
+	}
+	return rules, nil
+}
+
+func (s *Store) CreateRouteRule(name, path, content string) error {
+	name = NormalizeRouteRuleName(name)
+	path = strings.TrimSpace(path)
+	if err := ValidateSubscriptionPath(path); err != nil {
+		return err
+	}
+	if err := s.validateRouteRulePath(path, 0); err != nil {
+		return err
+	}
+	normalizedContent, err := NormalizeJSONText(content)
+	if err != nil {
+		return err
+	}
+	record := &model.RouteRule{Name: name, Path: path, Content: normalizedContent}
+	if err := s.db.Create(record).Error; err != nil {
+		return fmt.Errorf("save route rule: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateRouteRule(id uint, name, path, content string) error {
+	name = NormalizeRouteRuleName(name)
+	path = strings.TrimSpace(path)
+	if err := ValidateSubscriptionPath(path); err != nil {
+		return err
+	}
+	if err := s.validateRouteRulePath(path, id); err != nil {
+		return err
+	}
+	normalizedContent, err := NormalizeJSONText(content)
+	if err != nil {
+		return err
+	}
+
+	var record model.RouteRule
+	if err := s.db.First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("route rule not found")
+		}
+		return fmt.Errorf("load route rule: %w", err)
+	}
+	record.Name = name
+	record.Path = path
+	record.Content = normalizedContent
+	if err := s.db.Save(&record).Error; err != nil {
+		return fmt.Errorf("save route rule: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteRouteRule(id uint) error {
+	result := s.db.Delete(&model.RouteRule{}, id)
+	if result.Error != nil {
+		return fmt.Errorf("delete route rule: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("route rule not found")
+	}
+	return nil
+}
+
+func (s *Store) RouteRuleByPath(path string) (RouteRuleSnapshot, bool, error) {
+	var record model.RouteRule
+	err := s.db.Where("path = ?", strings.TrimSpace(path)).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return RouteRuleSnapshot{}, false, nil
+	}
+	if err != nil {
+		return RouteRuleSnapshot{}, false, fmt.Errorf("load route rule: %w", err)
+	}
+	return routeRuleSnapshot(record), true, nil
+}
+
+func (s *Store) RandomRouteRulePath() (string, error) {
+	for range 16 {
+		path, err := RandomPublicPath()
+		if err != nil {
+			return "", err
+		}
+		if err := s.validateRouteRulePath(path, 0); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique route rule path")
+}
+
+func (s *Store) validateRouteRulePath(path string, excludeRouteRuleID uint) error {
+	subscriptionPath, err := s.SubscriptionPath()
+	if err == nil && subscriptionPath == path {
+		return fmt.Errorf("path already used by subscription")
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	return s.validatePathNotUsedByRouteRule(path, excludeRouteRuleID)
+}
+
+func (s *Store) validatePathNotUsedByRouteRule(path string, excludeRouteRuleID uint) error {
+	var count int64
+	query := s.db.Model(&model.RouteRule{}).Where("path = ?", path)
+	if excludeRouteRuleID != 0 {
+		query = query.Where("id <> ?", excludeRouteRuleID)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return fmt.Errorf("check route rule path: %w", err)
+	}
+	if count > 0 {
+		return fmt.Errorf("path already used by route rule")
+	}
+	return nil
+}
+
+func routeRuleSnapshot(record model.RouteRule) RouteRuleSnapshot {
+	return RouteRuleSnapshot{
+		ID:      record.ID,
+		Name:    record.Name,
+		Path:    record.Path,
+		Content: record.Content,
+	}
 }
 
 func GetSettings() (*Settings, error) {
@@ -212,6 +348,14 @@ func GetConfigSnapshot() (*Config, error) {
 		return nil, err
 	}
 	return &Config{Settings: settings, Nodes: nodes}, nil
+}
+
+func GetRouteRules() ([]RouteRuleSnapshot, error) {
+	store, err := DefaultStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.RouteRules()
 }
 
 func GetSubscriptionPath() (string, error) {
@@ -250,6 +394,46 @@ func UpdateSubscriptionPath(path string) error {
 	return store.UpdateSubscriptionPath(path)
 }
 
+func CreateRouteRule(name, path, content string) error {
+	store, err := DefaultStore()
+	if err != nil {
+		return err
+	}
+	return store.CreateRouteRule(name, path, content)
+}
+
+func UpdateRouteRule(id uint, name, path, content string) error {
+	store, err := DefaultStore()
+	if err != nil {
+		return err
+	}
+	return store.UpdateRouteRule(id, name, path, content)
+}
+
+func DeleteRouteRule(id uint) error {
+	store, err := DefaultStore()
+	if err != nil {
+		return err
+	}
+	return store.DeleteRouteRule(id)
+}
+
+func GetRouteRuleByPath(path string) (RouteRuleSnapshot, bool, error) {
+	store, err := DefaultStore()
+	if err != nil {
+		return RouteRuleSnapshot{}, false, err
+	}
+	return store.RouteRuleByPath(path)
+}
+
+func RandomRouteRulePath() (string, error) {
+	store, err := DefaultStore()
+	if err != nil {
+		return "", err
+	}
+	return store.RandomRouteRulePath()
+}
+
 func UpdateNodes(nodes []string) error {
 	store, err := DefaultStore()
 	if err != nil {
@@ -260,4 +444,41 @@ func UpdateNodes(nodes []string) error {
 
 func ChangeNodes(newNodes []string) bool {
 	return UpdateNodes(newNodes) == nil
+}
+
+func NormalizeRouteRuleName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "路由规则"
+	}
+	return name
+}
+
+func NormalizeJSONText(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = DefaultRouteRuleJSON
+	}
+	if len([]byte(raw)) > maxRouteRuleJSONBytes {
+		return "", fmt.Errorf("route rule json is too large")
+	}
+	if !json.Valid([]byte(raw)) {
+		return "", fmt.Errorf("route rule json is invalid")
+	}
+
+	var out bytes.Buffer
+	if err := json.Indent(&out, []byte(raw), "", "  "); err != nil {
+		return "", fmt.Errorf("format route rule json: %w", err)
+	}
+	return out.String(), nil
+}
+
+func restrictFileMode(path string) error {
+	if path == "" || path == ":memory:" {
+		return nil
+	}
+	if err := os.Chmod(path, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("set private file permissions for %s: %w", path, err)
+	}
+	return nil
 }

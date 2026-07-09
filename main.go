@@ -1,15 +1,20 @@
 package main
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
+	"strconv"
 
+	"git.local/gosub/controller"
 	"git.local/gosub/lib"
 )
+
+//go:embed assets/app.css assets/app.js template/*.html
+var appFS embed.FS
 
 const (
 	configPath = "config.json"
@@ -17,7 +22,7 @@ const (
 )
 
 func NewDefaultConfig() *lib.Config {
-	randomStr, err := lib.RandomString(8)
+	randomStr, err := lib.RandomString(16)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,41 +42,47 @@ func WriteDefaultConfig(cfg *lib.Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, encoded, 0644)
+	return os.WriteFile(configPath, encoded, 0600)
 }
 
-func InitializeRuntime() (*lib.Settings, string) {
+func InitializeRuntime() (*lib.Settings, string, bool) {
+	// 设置配置路径还有sqlite数据库路径
 	lib.SetConfigPath(configPath)
 
-	if err := ensureConfigFile(); err != nil {
+	configCreated, err := ensureConfigFile()
+	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("initializing sqlite data")
+	log.Println("初始化 sqlite data")
 	if err := lib.InitializeStore(dbPath); err != nil {
 		log.Fatal(err)
 	}
-
+	// 获取配置
 	settings, err := lib.GetSettings()
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 获取订阅url路径
 	path, err := lib.GetSubscriptionPath()
 	if err != nil {
 		log.Fatal(err)
 	}
-	return settings, path
+	return settings, path, configCreated
 }
 
-func ensureConfigFile() error {
+func ensureConfigFile() (bool, error) {
 	if err := validateConfigFile(); errors.Is(err, os.ErrNotExist) {
 		if err := WriteDefaultConfig(NewDefaultConfig()); err != nil {
-			return fmt.Errorf("failed to write default config: %w", err)
+			return false, fmt.Errorf("failed to write default config: %w", err)
 		}
-		return validateConfigFile()
+		if err := validateConfigFile(); err != nil {
+			return false, err
+		}
+		return true, restrictConfigFileMode()
 	} else if err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return false, restrictConfigFileMode()
 }
 
 func validateConfigFile() error {
@@ -85,32 +96,58 @@ func validateConfigFile() error {
 	return err
 }
 
+func restrictConfigFileMode() error {
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return fmt.Errorf("set private config permissions: %w", err)
+	}
+	return nil
+}
+
 func main() {
-	settings, path := InitializeRuntime()
-	server := NewServer()
-	printStartupInfo(settings, path)
+	// 初始化
+	settings, path, configCreated := InitializeRuntime()
+	// 创建gin服务
+	server := controller.NewServer(appFS)
+	printStartupInfo(settings, path, configCreated)
 
 	addr := net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port))
 	if settings.TLS != nil && settings.TLS.Enabled {
-		log.Fatal(ListenAndServeTLSWithSamePortRedirect(addr, settings.TLS.CertFile, settings.TLS.KeyFile, server.Handler()))
+		log.Fatal(server.RunTLSWithSamePortRedirect(addr, settings.TLS.CertFile, settings.TLS.KeyFile))
 	}
-	log.Fatal(http.ListenAndServe(addr, server.Handler()))
+	log.Fatal(server.Run(addr))
 }
 
-func printStartupInfo(settings *lib.Settings, path string) {
+func printStartupInfo(settings *lib.Settings, path string, configCreated bool) {
 	webURL, subscriptionURL := startupURLs(settings, path)
 	tlsEnabled := settings.TLS != nil && settings.TLS.Enabled
 
-	log.Println("gosub started")
-	log.Printf("web_url=%s", webURL)
-	log.Printf("subscription_url=%s", subscriptionURL)
-	log.Printf("subscription_path=%s", path)
-	log.Printf("listen=%s", net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port)))
-	log.Printf("admin=%s", settings.Admin)
-	log.Printf("password=%s", settings.Password)
-	log.Printf("tls_enabled=%t", tlsEnabled)
-	if tlsEnabled {
-		log.Printf("tls_cert_file=%s", settings.TLS.CertFile)
-		log.Printf("tls_key_file=%s", settings.TLS.KeyFile)
+	log.Println("GoSub 启动")
+	log.Printf("Web 地址=%s", webURL)
+	log.Printf("订阅地址=%s", subscriptionURL)
+	log.Printf("订阅路径=%s", path)
+	log.Printf("监听地址=%s", net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port)))
+	log.Printf("管理员=%s", settings.Admin)
+	if configCreated {
+		log.Printf("密码=%s", settings.Password)
+	} else {
+		log.Print("密码=(hidden)")
 	}
+	log.Printf("TLS 启用=%t", tlsEnabled)
+	if tlsEnabled {
+		log.Printf("TLS 证书文件=%s", settings.TLS.CertFile)
+		log.Printf("TLS 密钥文件=%s", settings.TLS.KeyFile)
+	}
+}
+
+func startupURLs(settings *lib.Settings, path string) (string, string) {
+	scheme := "http"
+	if settings.TLS != nil && settings.TLS.Enabled {
+		scheme = "https"
+	}
+	host := settings.Host
+	if host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	base := scheme + "://" + net.JoinHostPort(host, strconv.Itoa(settings.Port))
+	return base + "/", base + path
 }

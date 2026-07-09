@@ -1,10 +1,14 @@
 package lib
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 )
 
 type TLSConfig struct {
@@ -38,6 +42,38 @@ type configSettings struct {
 	Admin    string          `json:"admin"`
 	Password string          `json:"password"`
 	TLS      *TLSConfig      `json:"tls,omitempty"`
+}
+
+var (
+	configFileMu   sync.RWMutex
+	configFilePath string
+)
+
+func SetConfigPath(path string) {
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+	configFilePath = path
+}
+
+func getConfigPath() string {
+	configFileMu.RLock()
+	defer configFileMu.RUnlock()
+	return configFilePath
+}
+
+func LoadConfigFile() (*Config, error) {
+	path := getConfigPath()
+	if path == "" {
+		return nil, fmt.Errorf("config path not set")
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	return ParseConfig(f)
 }
 
 func ParseConfig(r io.Reader) (*Config, error) {
@@ -139,7 +175,36 @@ func ValidateSubscriptionPath(path string) error {
 	if strings.ContainsAny(path, " \t\r\n") {
 		return fmt.Errorf("subscription path must not contain whitespace")
 	}
+	if strings.ContainsAny(path, "?#") {
+		return fmt.Errorf("subscription path must not contain query or fragment")
+	}
+	if len(path) > 128 {
+		return fmt.Errorf("subscription path is too long")
+	}
+	if isReservedPublicPath(path) {
+		return fmt.Errorf("subscription path is reserved")
+	}
 	return nil
+}
+
+func isReservedPublicPath(path string) bool {
+	if path == "/" {
+		return true
+	}
+	for _, prefix := range []string{
+		"/api",
+		"/assets",
+		"/login",
+		"/logout",
+		"/nodes",
+		"/route-rules",
+		"/subscription-path",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func CloneSettings(settings *Settings) *Settings {
@@ -165,4 +230,18 @@ func EncodeConfig(cfg *Config) ([]byte, error) {
 	return json.MarshalIndent(struct {
 		Settings *Settings `json:"settings"`
 	}{Settings: settings}, "", "  ")
+}
+
+func Authenticate(username, password string) bool {
+	settings, err := GetSettings()
+	if err != nil {
+		return false
+	}
+	return secureCompare(username, settings.Admin) && secureCompare(password, settings.Password)
+}
+
+func secureCompare(a, b string) bool {
+	ha := sha256.Sum256([]byte(a))
+	hb := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }

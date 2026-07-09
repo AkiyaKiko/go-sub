@@ -126,7 +126,37 @@ body {
   align-items: end;
 }
 
+.route-rule-manager {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.route-rule-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.route-rule-form {
+  display: grid;
+  gap: 12px;
+}
+
+.route-rule-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.8fr);
+  gap: 10px;
+}
+
+.route-rule-delete {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -166,6 +196,16 @@ button.primary:hover {
   background: var(--accent-strong);
 }
 
+button.danger {
+  border-color: #b42318;
+  color: #b42318;
+}
+
+button.danger:hover {
+  background: #b42318;
+  color: #ffffff;
+}
+
 button:hover {
   border-color: var(--accent);
 }
@@ -179,6 +219,10 @@ button:hover {
   font-size: 14px;
 }
 
+.message.error {
+  border-left-color: #b42318;
+}
+
 .footer-row {
   display: flex;
   align-items: center;
@@ -187,9 +231,19 @@ button:hover {
   margin-top: 12px;
 }
 
+.button-row {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
+}
+
+.empty-state {
+  margin: 16px 0 0;
 }
 
 @media (max-width: 720px) {
@@ -205,8 +259,15 @@ button:hover {
   }
 
   .info-grid,
-  .inline-form {
+  .inline-form,
+  .route-rule-grid {
     grid-template-columns: 1fr;
+  }
+
+  .button-row,
+  .route-rule-delete {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   button {

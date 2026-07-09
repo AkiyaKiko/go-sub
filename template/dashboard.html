@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>gosub 管理</title>
+    <link rel="stylesheet" href="/assets/app.css"/>
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1 class="title">代理订阅管理</h1>
+          <p class="subtitle">gosub</p>
+        </div>
+        <form method="post" action="/logout">
+          <button class="ghost" type="submit">退出登录</button>
+        </form>
+      </header>
+
+      <div id="status" aria-live="polite">
+        {{if .Message}}
+          <p class="message">{{.Message}}</p>
+        {{end}}
+      </div>
+
+      <section class="panel">
+        <h2 class="panel-title">当前服务</h2>
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="label">监听地址</span>
+            <div class="value">{{.ListenAddress}}</div>
+          </div>
+          <div class="info-item">
+            <span class="label">TLS</span>
+            <div class="value">{{.TLSStatus}}</div>
+          </div>
+          <div class="info-item">
+            <span class="label">订阅链接</span>
+            <div class="value" id="subscription-url">{{.SubscriptionURL}}</div>
+          </div>
+          <div class="info-item">
+            <span class="label">订阅路径</span>
+            <div class="value" id="subscription-path">{{.SubscriptionPath}}</div>
+          </div>
+          <div class="info-item">
+            <span class="label">管理员</span>
+            <div class="value">{{.Settings.Admin}}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">订阅路径</h2>
+        <form class="inline-form" id="subscription-form" method="post" action="/subscription-path" data-ajax-form>
+          <label>
+            <span class="label">路径</span>
+            <input id="path-input" name="path" value="{{.SubscriptionPath}}" required/>
+          </label>
+          <button class="ghost" type="submit" name="submit_action" value="random">随机并保存</button>
+          <button class="primary" type="submit" name="submit_action" value="save">保存路径</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">订阅连接</h2>
+        <form id="nodes-form" method="post" action="/nodes" data-ajax-form>
+          <label>
+            <span class="label">节点列表</span>
+            <textarea id="nodes-textarea" name="nodes" spellcheck="false">{{.NodesText}}</textarea>
+          </label>
+          <div class="footer-row">
+            <span class="muted">当前共 <span id="nodes-count">{{.NodeCount}}</span> 条连接</span>
+            <button class="primary" type="submit">保存连接</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">路由规则订阅</h2>
+        <form class="route-rule-form" id="new-route-rule-form" method="post" action="/route-rules" data-ajax-form>
+          <div class="route-rule-grid">
+            <label>
+              <span class="label">名称</span>
+              <input name="name" placeholder="路由规则"/>
+            </label>
+            <label>
+              <span class="label">路径</span>
+              <input name="path" placeholder="/rule-path"/>
+            </label>
+          </div>
+          <label>
+            <span class="label">JSON 内容</span>
+            <textarea name="content" spellcheck="false">{{.DefaultRouteJSON}}</textarea>
+          </label>
+          <div class="footer-row">
+            <span class="muted">每条规则都会生成一个独立 URL，访问时返回对应 JSON。</span>
+            <div class="button-row">
+              <button class="ghost" type="submit" name="submit_action" value="random">随机路径并新增</button>
+              <button class="primary" type="submit" name="submit_action" value="save">新增规则</button>
+            </div>
+          </div>
+        </form>
+        <div class="route-rule-manager">
+          <label>
+            <span class="label">选择要查看或修改的规则</span>
+            <select id="route-rule-select" {{if not .RouteRules}}disabled{{end}}>
+              {{range .RouteRules}}
+                <option value="{{.ID}}">{{.Name}} - {{.Path}}</option>
+              {{else}}
+                <option value="">暂无路由规则</option>
+              {{end}}
+            </select>
+          </label>
+          <div id="route-rule-editor">
+            <p class="muted empty-state">还没有路由规则。</p>
+          </div>
+        </div>
+        <div id="route-rules-data" data-rules="{{.RouteRulesData}}" hidden></div>
+      </section>
+    </main>
+  </body>
+</html>

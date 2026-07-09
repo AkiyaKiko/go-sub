@@ -9,12 +9,6 @@ if (-not (Test-Path $gocache)) {
 }
 $env:GOCACHE = $gocache
 
-Write-Host "Generating templ views..."
-go run github.com/a-h/templ/cmd/templ generate
-if ($LASTEXITCODE -ne 0) {
-  throw "templ generate failed."
-}
-
 Write-Host "Building Go executable..."
 go build -trimpath -ldflags "-s -w" -o $output .
 if ($LASTEXITCODE -ne 0) {
