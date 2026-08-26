@@ -8,6 +8,9 @@
   --accent: #166c4d;
   --accent-strong: #0f4f39;
   --message-bg: #edf7f2;
+  --error: #b42318;
+  --error-bg: #fff1f0;
+  --overlay: rgba(10, 18, 14, 0.52);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -20,6 +23,9 @@
     --accent: #42b883;
     --accent-strong: #65d39e;
     --message-bg: #143426;
+    --error: #ff8a80;
+    --error-bg: #3b1d1b;
+    --overlay: rgba(0, 0, 0, 0.72);
   }
 }
 
@@ -92,6 +98,17 @@ body {
   font-weight: 700;
 }
 
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading .panel-title {
+  margin-bottom: 0;
+}
+
 .info-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -132,9 +149,60 @@ body {
   margin-top: 18px;
 }
 
+.route-rule-controls {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.route-rule-selector {
+  min-width: 0;
+}
+
+.route-rule-delete-control {
+  display: flex;
+}
+
 .route-rule-card {
   border: 1px solid var(--line);
   border-radius: 8px;
+  overflow: hidden;
+}
+
+.route-rule-summary {
+  cursor: pointer;
+  display: list-item;
+  padding: 14px 16px;
+}
+
+.route-rule-summary-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
+  gap: 12px;
+  margin-left: 4px;
+}
+
+.route-rule-summary:hover {
+  background: var(--bg);
+}
+
+.route-rule-summary-title {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.route-rule-summary-path {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.route-rule-card-body {
+  border-top: 1px solid var(--line);
   padding: 16px;
 }
 
@@ -147,12 +215,6 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 0.8fr);
   gap: 10px;
-}
-
-.route-rule-delete {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
 }
 
 input,
@@ -197,17 +259,22 @@ button.primary:hover {
 }
 
 button.danger {
-  border-color: #b42318;
-  color: #b42318;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 button.danger:hover {
-  background: #b42318;
+  background: var(--error);
   color: #ffffff;
 }
 
 button:hover {
   border-color: var(--accent);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .message {
@@ -220,7 +287,88 @@ button:hover {
 }
 
 .message.error {
-  border-left-color: #b42318;
+  border-left-color: var(--error);
+}
+
+.toast-region {
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+  position: fixed;
+  right: 20px;
+  top: 20px;
+  width: min(360px, calc(100vw - 32px));
+  z-index: 1000;
+}
+
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 12px 30px rgba(15, 31, 23, 0.16);
+  color: var(--text);
+  font-size: 14px;
+  opacity: 0;
+  padding: 12px 14px;
+  transform: translateY(-8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast.error {
+  background: var(--error-bg);
+  border-left-color: var(--error);
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  margin: auto;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 20px;
+  width: min(720px, calc(100% - 32px));
+}
+
+.modal::backdrop {
+  background: var(--overlay);
+}
+
+.modal-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.modal-title {
+  font-size: 17px;
+  margin: 0;
+}
+
+.icon-button {
+  align-items: center;
+  display: inline-flex;
+  font-size: 24px;
+  height: 38px;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0;
+  width: 38px;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 .footer-row {
@@ -253,21 +401,31 @@ button:hover {
   }
 
   .topbar,
-  .footer-row {
+  .footer-row,
+  .panel-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
   .info-grid,
   .inline-form,
+  .route-rule-controls,
   .route-rule-grid {
     grid-template-columns: 1fr;
   }
 
   .button-row,
-  .route-rule-delete {
+  .modal-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .route-rule-summary-content {
+    grid-template-columns: 1fr;
+  }
+
+  .route-rule-summary-path {
+    text-align: left;
   }
 
   button {

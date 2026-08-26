@@ -1,6 +1,7 @@
 (function () {
   var routeRulesState = [];
   var selectedRouteRuleID = "";
+  var toastSequence = 0;
 
   function showMessage(text, isError) {
     var status = document.getElementById("status");
@@ -20,6 +21,34 @@
     status.appendChild(message);
   }
 
+  function showToast(text, isError) {
+    var region = document.getElementById("toast-region");
+    if (!region || !text) {
+      return;
+    }
+
+    toastSequence += 1;
+    var toast = document.createElement("div");
+    toast.className = "toast";
+    toast.dataset.toastId = String(toastSequence);
+    toast.setAttribute("role", isError ? "alert" : "status");
+    if (isError) {
+      toast.classList.add("error");
+    }
+    toast.textContent = text;
+    region.appendChild(toast);
+
+    window.requestAnimationFrame(function () {
+      toast.classList.add("visible");
+    });
+    window.setTimeout(function () {
+      toast.classList.remove("visible");
+      window.setTimeout(function () {
+        toast.remove();
+      }, 180);
+    }, 3000);
+  }
+
   function setText(id, value) {
     var node = document.getElementById(id);
     if (node) {
@@ -34,17 +63,18 @@
     }
   }
 
-  function updateDashboard(data) {
-    var selected = selectedRouteRuleID;
+  function updateDashboard(data, preferredRouteRuleID) {
+    var selected = preferredRouteRuleID || selectedRouteRuleID;
     var select = document.getElementById("route-rule-select");
-    if (select && select.value) {
+    if (!preferredRouteRuleID && select && select.value) {
       selected = select.value;
     }
 
-    showMessage(data.message || "");
+    showMessage("");
     setText("subscription-url", data.subscription_url || "");
     setText("subscription-path", data.subscription_path || "");
     setText("nodes-count", String(data.node_count || 0));
+    setText("route-rules-count", String((data.route_rules || []).length));
     setValue("path-input", data.subscription_path || "");
     setValue("nodes-textarea", data.nodes_text || "");
     renderRouteRules(data.route_rules || [], selected);
@@ -98,6 +128,34 @@
     return null;
   }
 
+  function findAddedRouteRuleID(nextRouteRules) {
+    var existingIDs = {};
+    routeRulesState.forEach(function (rule) {
+      existingIDs[String(rule.id)] = true;
+    });
+    for (var i = 0; i < nextRouteRules.length; i += 1) {
+      if (!existingIDs[String(nextRouteRules[i].id)]) {
+        return String(nextRouteRules[i].id);
+      }
+    }
+    return nextRouteRules.length ? String(nextRouteRules[nextRouteRules.length - 1].id) : "";
+  }
+
+  function updateRouteRuleDeleteControl(selectedID) {
+    var form = document.getElementById("delete-route-rule-form");
+    var button = document.getElementById("delete-route-rule-button");
+    if (!form || !button) {
+      return;
+    }
+    if (!selectedID) {
+      form.setAttribute("action", "");
+      button.disabled = true;
+      return;
+    }
+    form.setAttribute("action", "/route-rules/" + selectedID + "/delete");
+    button.disabled = false;
+  }
+
   function renderRouteRuleOptions(routeRules, selectedID) {
     var select = document.getElementById("route-rule-select");
     if (!select) {
@@ -112,6 +170,7 @@
       select.appendChild(emptyOption);
       select.disabled = true;
       selectedRouteRuleID = "";
+      updateRouteRuleDeleteControl("");
       return "";
     }
 
@@ -127,12 +186,31 @@
       }
       select.appendChild(option);
     });
+    updateRouteRuleDeleteControl(selectedRouteRuleID);
     return selectedRouteRuleID;
   }
 
   function createRouteRuleEditor(rule) {
-    var card = document.createElement("article");
+    var card = document.createElement("details");
     card.className = "route-rule-card";
+
+    var summary = document.createElement("summary");
+    summary.className = "route-rule-summary";
+    var summaryTitle = document.createElement("span");
+    summaryTitle.className = "route-rule-summary-title";
+    summaryTitle.textContent = rule.name || "路由规则";
+    var summaryPath = document.createElement("span");
+    summaryPath.className = "route-rule-summary-path";
+    summaryPath.textContent = rule.path || "";
+    var summaryContent = document.createElement("span");
+    summaryContent.className = "route-rule-summary-content";
+    summaryContent.appendChild(summaryTitle);
+    summaryContent.appendChild(summaryPath);
+    summary.appendChild(summaryContent);
+    card.appendChild(summary);
+
+    var body = document.createElement("div");
+    body.className = "route-rule-card-body";
 
     var form = document.createElement("form");
     form.className = "route-rule-form";
@@ -173,18 +251,9 @@
     footer.appendChild(actions);
     form.appendChild(footer);
 
-    var deleteForm = document.createElement("form");
-    deleteForm.className = "route-rule-delete";
-    deleteForm.method = "post";
-    deleteForm.setAttribute("action", "/route-rules/" + rule.id + "/delete");
-    deleteForm.setAttribute("data-ajax-form", "");
-    deleteForm.setAttribute("data-confirm", "确认删除这条路由规则？");
-    deleteForm.appendChild(createButton("danger", "", "", "删除规则"));
-
-    card.appendChild(form);
-    card.appendChild(deleteForm);
+    body.appendChild(form);
+    card.appendChild(body);
     bindAjaxForm(form);
-    bindAjaxForm(deleteForm);
     return card;
   }
 
@@ -220,7 +289,11 @@
       return [];
     }
     try {
-      return JSON.parse(window.atob(dataNode.dataset.rules));
+      var binary = window.atob(dataNode.dataset.rules);
+      var bytes = Uint8Array.from(binary, function (character) {
+        return character.charCodeAt(0);
+      });
+      return JSON.parse(new TextDecoder("utf-8").decode(bytes));
     } catch (error) {
       return [];
     }
@@ -235,6 +308,31 @@
     if (content) {
       content.value = data.default_route_json || "{\n  \"rules\": []\n}";
     }
+    closeNewRouteRuleDialog();
+  }
+
+  function openNewRouteRuleDialog() {
+    var dialog = document.getElementById("new-route-rule-dialog");
+    if (!dialog) {
+      return;
+    }
+    if (typeof dialog.showModal === "function") {
+      dialog.showModal();
+      return;
+    }
+    dialog.setAttribute("open", "");
+  }
+
+  function closeNewRouteRuleDialog() {
+    var dialog = document.getElementById("new-route-rule-dialog");
+    if (!dialog) {
+      return;
+    }
+    if (typeof dialog.close === "function" && dialog.open) {
+      dialog.close();
+      return;
+    }
+    dialog.removeAttribute("open");
   }
 
   function bindAjaxForm(form) {
@@ -274,11 +372,18 @@
           });
         })
         .then(function (data) {
-          updateDashboard(data);
+          var preferredRouteRuleID = "";
+          if (form.id === "new-route-rule-form") {
+            preferredRouteRuleID = findAddedRouteRuleID(data.route_rules || []);
+          }
+          updateDashboard(data, preferredRouteRuleID);
           resetNewRouteRuleForm(form, data);
+          showToast(data.message || "操作成功", false);
         })
         .catch(function (error) {
-          showMessage(error && error.message ? error.message : "保存失败", true);
+          var message = error && error.message ? error.message : "保存失败";
+          showMessage("");
+          showToast(message, true);
         });
     });
   }
@@ -289,11 +394,21 @@
     if (select) {
       selectedRouteRuleID = select.value || "";
       routeRulesState = loadInitialRouteRules();
+      updateRouteRuleDeleteControl(selectedRouteRuleID);
       renderRouteRuleEditor(selectedRouteRuleID);
       select.addEventListener("change", function () {
         selectedRouteRuleID = select.value || "";
+        updateRouteRuleDeleteControl(selectedRouteRuleID);
         renderRouteRuleEditor(selectedRouteRuleID);
       });
     }
+
+    var openButton = document.getElementById("open-new-route-rule");
+    if (openButton) {
+      openButton.addEventListener("click", openNewRouteRuleDialog);
+    }
+    document.querySelectorAll("[data-close-route-rule-dialog]").forEach(function (button) {
+      button.addEventListener("click", closeNewRouteRuleDialog);
+    });
   });
 })();
