@@ -279,8 +279,35 @@
 
   function renderRouteRules(routeRules, selectedID) {
     routeRulesState = routeRules.slice();
+    renderRouteRulePaths(routeRulesState);
     var nextSelectedID = renderRouteRuleOptions(routeRulesState, selectedID);
     renderRouteRuleEditor(nextSelectedID);
+  }
+
+  function renderRouteRulePaths(routeRules) {
+    var list = document.getElementById("route-rule-paths");
+    if (!list) {
+      return;
+    }
+    list.innerHTML = "";
+    if (!routeRules.length) {
+      var empty = document.createElement("li");
+      empty.className = "muted";
+      empty.textContent = "暂无路由规则";
+      list.appendChild(empty);
+      return;
+    }
+    routeRules.forEach(function (rule) {
+      var item = document.createElement("li");
+      var name = document.createElement("span");
+      name.className = "muted";
+      name.textContent = rule.name || "路由规则";
+      var path = document.createElement("code");
+      path.textContent = rule.path || "";
+      item.appendChild(name);
+      item.appendChild(path);
+      list.appendChild(item);
+    });
   }
 
   function loadInitialRouteRules() {
@@ -392,10 +419,7 @@
     document.querySelectorAll("form[data-ajax-form]").forEach(bindAjaxForm);
     var select = document.getElementById("route-rule-select");
     if (select) {
-      selectedRouteRuleID = select.value || "";
-      routeRulesState = loadInitialRouteRules();
-      updateRouteRuleDeleteControl(selectedRouteRuleID);
-      renderRouteRuleEditor(selectedRouteRuleID);
+      renderRouteRules(loadInitialRouteRules(), select.value || "");
       select.addEventListener("change", function () {
         selectedRouteRuleID = select.value || "";
         updateRouteRuleDeleteControl(selectedRouteRuleID);

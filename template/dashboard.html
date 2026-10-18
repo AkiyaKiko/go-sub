@@ -4,8 +4,8 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>gosub 管理</title>
-    <link rel="stylesheet" href="/assets/app.css?v=20260826-2"/>
-    <script src="/assets/app.js?v=20260826-2" defer></script>
+    <link rel="stylesheet" href="/assets/app.css?v=20261018"/>
+    <script src="/assets/app.js?v=20261018" defer></script>
   </head>
   <body>
     <main class="shell">
@@ -44,6 +44,16 @@
           <div class="info-item">
             <span class="label">订阅路径</span>
             <div class="value" id="subscription-path">{{.SubscriptionPath}}</div>
+          </div>
+          <div class="info-item">
+            <span class="label">路由规则订阅路径</span>
+            <ul class="value route-rule-paths" id="route-rule-paths">
+              {{range .RouteRules}}
+                <li><span class="muted">{{.Name}}</span><code>{{.Path}}</code></li>
+              {{else}}
+                <li class="muted">暂无路由规则</li>
+              {{end}}
+            </ul>
           </div>
           <div class="info-item">
             <span class="label">管理员</span>

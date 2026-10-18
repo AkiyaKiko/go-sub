@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -41,7 +42,7 @@ type configSettings struct {
 	Path     json.RawMessage `json:"path,omitempty"`
 	Admin    string          `json:"admin"`
 	Password string          `json:"password"`
-	TLS      *TLSConfig      `json:"tls,omitempty"`
+	TLS      json.RawMessage `json:"tls,omitempty"`
 }
 
 var (
@@ -84,24 +85,36 @@ func ParseConfig(r io.Reader) (*Config, error) {
 	if err := dec.Decode(&bootstrap); err != nil {
 		return nil, fmt.Errorf("config error: %w", err)
 	}
-	cfg := Config{Settings: bootstrap.Settings.toSettings()}
+	settings, err := bootstrap.Settings.toSettings()
+	if err != nil {
+		return nil, fmt.Errorf("config error: invalid settings.tls: %w", err)
+	}
+	cfg := Config{Settings: settings}
 	if err := NormalizeConfig(&cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-func (settings *configSettings) toSettings() *Settings {
+func (settings *configSettings) toSettings() (*Settings, error) {
 	if settings == nil {
-		return nil
+		return nil, nil
 	}
-	return &Settings{
+	normalized := &Settings{
 		Host:     settings.Host,
 		Port:     settings.Port,
 		Admin:    settings.Admin,
 		Password: settings.Password,
-		TLS:      settings.TLS,
 	}
+	// The default loopback listener ignores TLS, including certificate validation.
+	if settings.Host != "" && settings.Host != "127.0.0.1" && len(settings.TLS) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(settings.TLS))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&normalized.TLS); err != nil {
+			return nil, err
+		}
+	}
+	return normalized, nil
 }
 
 func NormalizeConfig(cfg *Config) error {
@@ -139,7 +152,7 @@ func NormalizeSettings(settings *Settings) error {
 		return fmt.Errorf(`config error: "settings.admin" and "settings.password" are required`)
 	}
 
-	if settings.TLS == nil {
+	if settings.Host == "127.0.0.1" || settings.TLS == nil {
 		settings.TLS = &TLSConfig{Enabled: false}
 	}
 	if !settings.TLS.Enabled {

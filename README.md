@@ -6,6 +6,7 @@ gosub 是一个本地代理订阅管理服务。当前技术栈为 Gin + GORM + 
 
 - 订阅分发：访问保存的订阅路径时，返回 Base64 编码后的节点列表。
 - 管理后台：登录后可编辑订阅路径、节点列表和路由规则。
+- 当前服务：展示所有路由规则的名称和订阅路径，新增、修改、删除后自动更新。
 - 路由规则订阅：可维护多条独立 JSON 规则，每条规则都有独立访问 URL。
 - 原生页面：使用 Go `html/template` 和原生 JavaScript，不依赖 templ/htmx。
 - 本地存储：使用 GORM 管理 SQLite 表结构和 CRUD。
@@ -21,12 +22,14 @@ gosub/
 │  ├─ handler.go              # 页面、API、订阅输出、路由规则相关 handler
 │  ├─ support.go              # 状态码、session 鉴权、模板渲染、安全响应头、同源校验
 │  ├─ tls_redirect_server.go  # TLS 开启时同端口 HTTPS 与 HTTP 跳转逻辑
+│  ├─ dashboard_test.go       # 本地 HTTP 登录和后台路由规则路径展示测试
 │  ├─ dynamic_route_test.go   # 路由规则动态访问测试
 │  └─ security_test.go        # 同源写请求保护测试
 ├─ model/
 │  └─ model.go                # GORM 模型：节点、订阅路径、路由规则
 ├─ lib/
 │  ├─ config.go               # config.json 加载、解析、校验、鉴权比较、路径校验
+│  ├─ config_test.go          # 本地监听忽略 TLS 和其他监听地址的配置校验测试
 │  ├─ store.go                # SQLite/GORM 初始化、迁移、节点/订阅/路由规则 CRUD
 │  ├─ session.go              # 内存 session 存储和 session token 生成
 │  ├─ random.go               # 加密随机字符串、公开路径、用户 ID 生成
@@ -87,6 +90,8 @@ gosub/
 ```
 
 旧版 `settings.path` 和 `nodes` 字段会被忽略。订阅路径、节点列表和路由规则请在管理后台修改，或通过 API 写入 SQLite。
+
+当 `settings.host` 为 `127.0.0.1`（或省略后使用该默认值）时，程序忽略整个 `settings.tls` 配置，始终以 HTTP 启动，不校验证书和私钥配置。通过 Nginx 反向代理时，由 Nginx 提供 HTTPS。其他监听地址仍按 `tls.enabled` 决定是否启用 TLS；启用时必须填写证书和私钥路径。
 
 ## 启动
 

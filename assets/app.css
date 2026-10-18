@@ -131,6 +131,27 @@ body {
   font-size: 14px;
 }
 
+.route-rule-paths {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 0;
+}
+
+.route-rule-paths li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.route-rule-paths code {
+  min-width: 0;
+}
+
 .form-grid {
   display: grid;
   gap: 12px;
