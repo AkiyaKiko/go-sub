@@ -41,9 +41,13 @@ gosub/
 ├─ template/
 │  ├─ login.html              # 登录页
 │  └─ dashboard.html          # 管理后台
-├─ .github/workflows/
-│  ├─ cd-release.yml          # push / 手动触发：运行 go test
-│  └─ release-tag.yml         # v* tag：测试、跨平台构建并发布 GitHub Release
+├─ .github/
+│  ├─ scripts/
+│  │  ├─ release_archive.py      # 发布归档创建、内容/权限和隔离解压校验
+│  │  └─ test_release_archive.py # 危险归档条目和目录元数据回归测试
+│  └─ workflows/
+│     ├─ cd-release.yml        # push / 手动触发：Go 和归档校验测试
+│     └─ release-tag.yml       # v* tag：测试、跨平台构建、校验并发布 Release
 ├─ build.ps1                  # Windows 本地构建脚本
 ├─ config.example.json        # 配置示例
 ├─ go.mod / go.sum            # Go 模块与依赖锁定
@@ -107,6 +111,33 @@ go run .
 - `{route_rule_path}`：路由规则 JSON 地址
 - `/api/*`：JSON API
 
+## Linux 部署与更新
+
+发布包仅包含对应平台的可执行文件、`config.example.json` 和 `README.md`。归档不包含 `./` 目录条目，也不包含实际运行的 `config.json` 或 `gosub.db`。tar 包内文件使用数字 UID/GID `0:0`，可执行文件权限为 `0755`，示例配置和文档为 `0644`，不会携带构建机器的用户或组信息。
+
+发布前会检查文件清单、类型、属主、权限，并在 Linux 临时目录中试解压，确认目标目录的权限和所有权以及已有配置、数据库内容保持不变。tar 包还会以 root 身份在独立临时目录中重复验证，覆盖 root 默认恢复属主的场景。包含目录、链接、重复条目或额外文件的归档会阻止发布。
+
+安装和更新时先解压到独立临时目录。以下示例使用 GNU tar，兼容包含 `./` 条目的旧版本发布包。执行前将归档路径替换为实际下载位置，并确认安装目录与现有 `gosub.service` 的 `ExecStart` 路径一致；如果服务使用 `/root/gosub/gosub`，将示例中的安装目录改为 `/root/gosub`：
+
+```bash
+archive=/absolute/path/to/gosub_linux_amd64.tar.gz
+gosub_install_dir=/opt/gosub
+gosub_stage=$(mktemp -d)
+tar --extract --gzip --file "$archive" \
+  --directory "$gosub_stage" --no-same-owner --no-overwrite-dir
+
+sudo install -d -m 0755 "$gosub_install_dir"
+sudo systemctl stop gosub
+sudo install -m 0755 "$gosub_stage/gosub_linux_amd64" "$gosub_install_dir/gosub"
+sudo systemctl start gosub
+```
+
+更新时保留原有 `WorkingDirectory`、配置和数据库位置；首次安装还需要先配置服务。不要用 `config.example.json` 覆盖已有的 `config.json`。
+
+`--no-same-owner` 避免恢复归档中的属主，`--no-overwrite-dir` 保留已有目录的权限和所有权。不要直接在 `/root` 或 `/` 中解压旧包，也不要通过递归 `chown` 或 `chmod` 修复部署目录。[GNU tar 参数说明](https://www.gnu.org/software/tar/manual/html_node/Option-Summary.html)
+
+此修复只影响重新构建和发布的归档，已下载的旧版本包需要继续使用以上解压参数。
+
 ## API
 
 除 `POST /api/login` 外，所有管理 API 都需要 `session_id` Cookie。
@@ -169,4 +200,10 @@ go build -trimpath -ldflags "-s -w" -o gosub .
 go test ./...
 ```
 
-CI 会在 push 和 release tag 流程中运行测试。SQLite driver 使用纯 Go 实现，便于 `CGO_ENABLED=0` 跨平台构建。
+归档校验测试（仅使用 Python 3 标准库）：
+
+```bash
+python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+```
+
+CI 会在 push 和 release tag 流程中运行以上测试，并通过 `release_archive.py` 创建和校验各平台的发布包。打包和校验只使用 Python 3 标准库，Linux 试解压使用 GNU tar。SQLite driver 使用纯 Go 实现，便于 `CGO_ENABLED=0` 跨平台构建。

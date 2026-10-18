@@ -32,6 +32,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Test release archive validation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: test
@@ -78,7 +81,7 @@ jobs:
           mkdir -p dist
           go build -trimpath -ldflags "-s -w" -o "dist/${bin_name}" .
 
-      - name: Package release artifact
+      - name: Package and verify release artifact
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -97,11 +100,19 @@ jobs:
           cp README.md package/
 
           if [ "${GOOS}" = "windows" ]; then
-            cd package
-            zip -r "../release/${archive_base}.zip" .
+            archive_path="release/${archive_base}.zip"
           else
-            tar -czf "release/${archive_base}.tar.gz" -C package .
+            archive_path="release/${archive_base}.tar.gz"
           fi
+
+          python3 .github/scripts/release_archive.py "${archive_path}" "${bin_name}" --package-dir package
+
+      - name: Verify root tar extraction in an isolated temporary directory
+        if: matrix.goos != 'windows'
+        run: >-
+          sudo python3 .github/scripts/release_archive.py
+          "release/${{ env.APP_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          "${{ env.APP_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}"
 
       - name: Upload packaged binary
         uses: actions/upload-artifact@v4

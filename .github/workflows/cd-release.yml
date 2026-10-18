@@ -29,3 +29,6 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Test release archive validation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v

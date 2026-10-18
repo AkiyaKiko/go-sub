@@ -10,7 +10,7 @@ if (-not (Test-Path $gocache)) {
 $env:GOCACHE = $gocache
 
 Write-Host "Building Go executable..."
-go build -trimpath -ldflags "-s -w" -o $output .
+go -C $root build -trimpath -ldflags "-s -w" -o $output .
 if ($LASTEXITCODE -ne 0) {
   throw "Go build failed."
 }

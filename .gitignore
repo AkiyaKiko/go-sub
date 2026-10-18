@@ -9,6 +9,9 @@
 # Go cache
 .gocache/
 
+# Release validation cache
+.github/scripts/__pycache__/
+
 # Runtime data (contains credentials/local state)
 config.json
 gosub.db
