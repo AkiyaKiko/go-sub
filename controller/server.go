@@ -3,6 +3,7 @@ package controller
 import (
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,7 +28,9 @@ func NewServer(files fs.FS) *Server {
 		router: router,
 		files:  files,
 	}
-	router.Use(gin.Logger(), gin.Recovery(), server.securityHeaders(), server.sameOriginProtection())
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{Skip: func(c *gin.Context) bool {
+		return c.GetBool("private_subscription") || strings.HasSuffix(c.Request.URL.Path, "/sing-box")
+	}}), gin.Recovery(), server.securityHeaders(), server.sameOriginProtection())
 	server.registerRoutes()
 	return server
 }

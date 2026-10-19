@@ -131,6 +131,55 @@ body {
   font-size: 14px;
 }
 
+.subscription-link {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.clipboard-field {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+}
+
+button.copy-button {
+  min-height: 30px;
+  padding: 2px 9px;
+  font-size: 13px;
+  width: auto;
+}
+
+.conversion-report {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.conversion-report p {
+  margin: 4px 0;
+}
+
+.conversion-report summary {
+  cursor: pointer;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.conversion-report ul {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  padding-left: 20px;
+}
+
+.conversion-error {
+  color: var(--error);
+}
+
 .route-rule-paths {
   display: grid;
   gap: 6px;

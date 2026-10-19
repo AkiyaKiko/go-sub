@@ -95,6 +95,8 @@ func (s *Server) apiConfig(c *gin.Context) {
 		"subscription_path": path,
 		"subscription_url":  subURL,
 		"route_rules":       rules,
+		"singbox_path":      lib.SingBoxPath(path),
+		"singbox_url":       publicURL(cfg.Settings, lib.SingBoxPath(path)),
 	})
 }
 
@@ -229,17 +231,26 @@ func (s *Server) subscription(c *gin.Context) {
 	}
 
 	requestPath := c.Request.URL.Path
+	isSingBox := requestPath == lib.SingBoxPath(subscriptionPath)
+	if isSingBox {
+		c.Set("private_subscription", true)
+	}
 	routeRule, routeRuleFound, err := lib.GetRouteRuleByPath(requestPath)
 	if err != nil {
 		c.String(statusInternalServerError, "route rule error")
 		return
 	}
-	if requestPath != subscriptionPath && !routeRuleFound {
+	if requestPath != subscriptionPath && !routeRuleFound && !isSingBox {
 		c.String(statusNotFound, "404 page not found")
 		return
 	}
-	if c.Request.Method != "GET" {
+	if c.Request.Method != "GET" && !(isSingBox && !routeRuleFound && c.Request.Method == "HEAD") {
 		c.String(statusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if isSingBox && !routeRuleFound {
+		c.Set("private_subscription", true)
+		s.singBoxSubscription(c)
 		return
 	}
 
@@ -258,6 +269,28 @@ func (s *Server) subscription(c *gin.Context) {
 		body = ""
 	}
 	c.Data(statusOK, "text/plain; charset=utf-8", []byte(body))
+}
+
+func (s *Server) singBoxSubscription(c *gin.Context) {
+	body, report, err := lib.GetSingBoxSubscription()
+	if err != nil || len(body) == 0 {
+		c.Header("Retry-After", "300")
+		if c.Request.Method == "HEAD" {
+			c.Header("Content-Type", "application/json; charset=utf-8")
+			c.Status(statusServiceUnavailable)
+		} else {
+			c.JSON(statusServiceUnavailable, gin.H{"message": "sing-box subscription unavailable"})
+		}
+		return
+	}
+	c.Header("X-SingBox-Status", report.Status)
+	c.Header("Content-Type", "application/json; charset=utf-8")
+	c.Header("Content-Length", strconv.Itoa(len(body)))
+	if c.Request.Method == "HEAD" {
+		c.Status(statusOK)
+		return
+	}
+	c.Data(statusOK, "application/json; charset=utf-8", body)
 }
 
 func logRequest(c *gin.Context) {

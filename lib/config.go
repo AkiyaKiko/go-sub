@@ -19,11 +19,12 @@ type TLSConfig struct {
 }
 
 type Settings struct {
-	Host     string     `json:"host"`
-	Port     int        `json:"port"`
-	Admin    string     `json:"admin"`
-	Password string     `json:"password"`
-	TLS      *TLSConfig `json:"tls,omitempty"`
+	Host     string          `json:"host"`
+	Port     int             `json:"port"`
+	Admin    string          `json:"admin"`
+	Password string          `json:"password"`
+	TLS      *TLSConfig      `json:"tls,omitempty"`
+	SingBox  *SingBoxOptions `json:"singbox,omitempty"`
 }
 
 type Config struct {
@@ -43,6 +44,7 @@ type configSettings struct {
 	Admin    string          `json:"admin"`
 	Password string          `json:"password"`
 	TLS      json.RawMessage `json:"tls,omitempty"`
+	SingBox  *SingBoxOptions `json:"singbox,omitempty"`
 }
 
 var (
@@ -105,6 +107,7 @@ func (settings *configSettings) toSettings() (*Settings, error) {
 		Port:     settings.Port,
 		Admin:    settings.Admin,
 		Password: settings.Password,
+		SingBox:  settings.SingBox,
 	}
 	// The default loopback listener ignores TLS, including certificate validation.
 	if settings.Host != "" && settings.Host != "127.0.0.1" && len(settings.TLS) > 0 {
@@ -151,7 +154,6 @@ func NormalizeSettings(settings *Settings) error {
 	if settings.Admin == "" || settings.Password == "" {
 		return fmt.Errorf(`config error: "settings.admin" and "settings.password" are required`)
 	}
-
 	if settings.Host == "127.0.0.1" || settings.TLS == nil {
 		settings.TLS = &TLSConfig{Enabled: false}
 	}
@@ -225,6 +227,10 @@ func CloneSettings(settings *Settings) *Settings {
 		return nil
 	}
 	cloned := *settings
+	if settings.SingBox != nil {
+		options := *settings.SingBox
+		cloned.SingBox = &options
+	}
 	if settings.TLS != nil {
 		tls := *settings.TLS
 		cloned.TLS = &tls

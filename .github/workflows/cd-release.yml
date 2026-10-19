@@ -27,6 +27,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install pinned sing-box configuration validator
+        run: bash .github/scripts/install_singbox_check.sh
+
       - name: Test
         run: go test ./...
 

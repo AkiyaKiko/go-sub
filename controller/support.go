@@ -25,6 +25,7 @@ const (
 	statusNotFound            = 404
 	statusMethodNotAllowed    = 405
 	statusInternalServerError = 500
+	statusServiceUnavailable  = 503
 )
 
 const (
@@ -39,17 +40,21 @@ type LoginData struct {
 }
 
 type DashboardData struct {
-	Settings         *lib.Settings `json:"-"`
-	ListenAddress    string        `json:"listen_address"`
-	TLSStatus        string        `json:"tls_status"`
-	SubscriptionPath string        `json:"subscription_path"`
-	SubscriptionURL  string        `json:"subscription_url"`
-	NodesText        string        `json:"nodes_text"`
-	NodeCount        int           `json:"node_count"`
-	RouteRules       []RouteRule   `json:"route_rules"`
-	RouteRulesData   string        `json:"-"`
-	DefaultRouteJSON string        `json:"default_route_json"`
-	Message          string        `json:"message"`
+	Settings          *lib.Settings        `json:"-"`
+	ListenAddress     string               `json:"listen_address"`
+	TLSStatus         string               `json:"tls_status"`
+	SubscriptionPath  string               `json:"subscription_path"`
+	SubscriptionURL   string               `json:"subscription_url"`
+	SingBoxPath       string               `json:"singbox_path"`
+	SingBoxURL        string               `json:"singbox_url"`
+	SingBoxReport     lib.ConversionReport `json:"singbox_report"`
+	SingBoxStatusText string               `json:"singbox_status_text"`
+	NodesText         string               `json:"nodes_text"`
+	NodeCount         int                  `json:"node_count"`
+	RouteRules        []RouteRule          `json:"route_rules"`
+	RouteRulesData    string               `json:"-"`
+	DefaultRouteJSON  string               `json:"default_route_json"`
+	Message           string               `json:"message"`
 }
 
 type RouteRule struct {
@@ -231,6 +236,10 @@ func (s *Server) loadDashboardData(message string) (DashboardData, error) {
 	if err != nil {
 		return DashboardData{}, fmt.Errorf("load route rules: %w", err)
 	}
+	_, singBoxReport, singBoxErr := lib.GetSingBoxSubscription()
+	if singBoxErr != nil {
+		singBoxReport = lib.ConversionReport{Status: "error", Diagnostics: []lib.ConversionDiagnostic{{Code: "EXPORT_STORAGE_ERROR", Status: "invalid", Message: "sing-box 导出暂时不可用"}}}
+	}
 
 	tlsStatus := "关闭"
 	if cfg.Settings.TLS != nil && cfg.Settings.TLS.Enabled {
@@ -252,18 +261,37 @@ func (s *Server) loadDashboardData(message string) (DashboardData, error) {
 	}
 
 	return DashboardData{
-		Settings:         cfg.Settings,
-		ListenAddress:    net.JoinHostPort(cfg.Settings.Host, strconv.Itoa(cfg.Settings.Port)),
-		TLSStatus:        tlsStatus,
-		SubscriptionPath: path,
-		SubscriptionURL:  subURL,
-		NodesText:        strings.Join(cfg.Nodes, "\n"),
-		NodeCount:        len(cfg.Nodes),
-		RouteRules:       routeRules,
-		RouteRulesData:   base64.StdEncoding.EncodeToString(routeRulesJSON),
-		DefaultRouteJSON: lib.DefaultRouteRuleJSON,
-		Message:          message,
+		Settings:          cfg.Settings,
+		ListenAddress:     net.JoinHostPort(cfg.Settings.Host, strconv.Itoa(cfg.Settings.Port)),
+		TLSStatus:         tlsStatus,
+		SubscriptionPath:  path,
+		SubscriptionURL:   subURL,
+		SingBoxPath:       lib.SingBoxPath(path),
+		SingBoxURL:        publicURL(cfg.Settings, lib.SingBoxPath(path)),
+		SingBoxReport:     singBoxReport,
+		SingBoxStatusText: singBoxStatusText(singBoxReport.Status),
+		NodesText:         strings.Join(cfg.Nodes, "\n"),
+		NodeCount:         len(cfg.Nodes),
+		RouteRules:        routeRules,
+		RouteRulesData:    base64.StdEncoding.EncodeToString(routeRulesJSON),
+		DefaultRouteJSON:  lib.DefaultRouteRuleJSON,
+		Message:           message,
 	}, nil
+}
+
+func singBoxStatusText(status string) string {
+	switch status {
+	case "ready":
+		return "已同步"
+	case "warning":
+		return "已同步，存在跳过节点或转换警告"
+	case "stale":
+		return "未同步：保留上一次有效配置"
+	case "disabled":
+		return "已停用：节点列表为空"
+	default:
+		return "不可用：转换失败"
+	}
 }
 
 func publicURL(settings *lib.Settings, path string) string {

@@ -4,8 +4,8 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>gosub 管理</title>
-    <link rel="stylesheet" href="/assets/app.css?v=20261018"/>
-    <script src="/assets/app.js?v=20261018" defer></script>
+    <link rel="stylesheet" href="/assets/app.css?v=20261019"/>
+    <script src="/assets/app.js?v=20261019" defer></script>
   </head>
   <body>
     <main class="shell">
@@ -38,8 +38,22 @@
             <div class="value">{{.TLSStatus}}</div>
           </div>
           <div class="info-item">
-            <span class="label">订阅链接</span>
-            <div class="value" id="subscription-url">{{.SubscriptionURL}}</div>
+            <span class="label">Xray / V2Ray 订阅链接</span>
+            <div class="subscription-link">
+              <div class="value" id="subscription-url">{{.SubscriptionURL}}</div>
+              <button class="ghost copy-button" type="button" data-copy-target="subscription-url" aria-label="复制 Xray 订阅链接" title="复制 Xray 订阅链接">复制</button>
+            </div>
+          </div>
+          <div class="info-item">
+            <span class="label">sing-box 订阅链接</span>
+            <div class="subscription-link">
+              <div class="value" id="singbox-url">{{.SingBoxURL}}</div>
+              <button class="ghost copy-button" type="button" data-copy-target="singbox-url" aria-label="复制 sing-box 订阅链接" title="复制 sing-box 订阅链接">复制</button>
+            </div>
+          </div>
+          <div class="info-item">
+            <span class="label">sing-box 订阅路径</span>
+            <div class="value" id="singbox-path">{{.SingBoxPath}}</div>
           </div>
           <div class="info-item">
             <span class="label">订阅路径</span>
@@ -59,6 +73,20 @@
             <span class="label">管理员</span>
             <div class="value">{{.Settings.Admin}}</div>
           </div>
+        </div>
+        <div class="conversion-report">
+          <span class="label">sing-box 转换状态</span>
+          <p class="value{{if or (eq .SingBoxReport.Status "error") (eq .SingBoxReport.Status "stale")}} conversion-error{{end}}" id="singbox-status">{{.SingBoxStatusText}}</p>
+          <p class="muted" id="singbox-counts">共 {{.SingBoxReport.Total}} 个节点，可转换 {{.SingBoxReport.Converted}} 个，失败 {{.SingBoxReport.Failed}} 个，警告 {{.SingBoxReport.Warnings}} 条</p>
+          <p class="muted" id="singbox-generated-at">{{if .SingBoxReport.GeneratedAt}}生成时间：{{.SingBoxReport.GeneratedAt}}{{end}}</p>
+          <details id="singbox-diagnostics-details" {{if not .SingBoxReport.Diagnostics}}hidden{{end}}>
+            <summary>转换明细</summary>
+            <ul id="singbox-diagnostics">
+              {{range .SingBoxReport.Diagnostics}}
+                <li>{{if .SourceIndex}}节点 {{.SourceIndex}}：{{end}}{{.Message}}（{{.Code}}）</li>
+              {{end}}
+            </ul>
+          </details>
         </div>
       </section>
 

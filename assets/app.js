@@ -71,13 +71,60 @@
     }
 
     showMessage("");
-    setText("subscription-url", data.subscription_url || "");
+    setText("subscription-url", subscriptionDisplayURL(data.subscription_path, data.subscription_url));
     setText("subscription-path", data.subscription_path || "");
+    setText("singbox-url", subscriptionDisplayURL(data.singbox_path, data.singbox_url));
+    setText("singbox-path", data.singbox_path || "");
+    renderSingBoxReport(data.singbox_report || {}, data.singbox_status_text || "");
     setText("nodes-count", String(data.node_count || 0));
     setText("route-rules-count", String((data.route_rules || []).length));
     setValue("path-input", data.subscription_path || "");
     setValue("nodes-textarea", data.nodes_text || "");
     renderRouteRules(data.route_rules || [], selected);
+  }
+
+  function subscriptionDisplayURL(path, fallback) {
+    return path && window.location.origin ? window.location.origin + path : (fallback || "");
+  }
+
+  function renderSingBoxReport(report, statusText) {
+    setText("singbox-status", statusText);
+    var status = document.getElementById("singbox-status");
+    if (status) { status.classList.toggle("conversion-error", report.status === "error" || report.status === "stale"); }
+    setText("singbox-counts", "共 " + (report.total || 0) + " 个节点，可转换 " + (report.converted || 0) + " 个，失败 " + (report.failed || 0) + " 个，警告 " + (report.warnings || 0) + " 条");
+    setText("singbox-generated-at", report.generated_at ? "生成时间：" + report.generated_at : "");
+    var details = document.getElementById("singbox-diagnostics-details");
+    var list = document.getElementById("singbox-diagnostics");
+    var diagnostics = report.diagnostics || [];
+    if (!details || !list) { return; }
+    details.hidden = !diagnostics.length;
+    list.innerHTML = "";
+    diagnostics.forEach(function (diagnostic) {
+      var item = document.createElement("li");
+      item.textContent = (diagnostic.source_index ? "节点 " + diagnostic.source_index + "：" : "") + diagnostic.message + "（" + diagnostic.code + "）";
+      list.appendChild(item);
+    });
+  }
+
+  function copySubscriptionURL(button) {
+    var target = document.getElementById(button.dataset.copyTarget);
+    if (!target) { return; }
+    var text = target.textContent;
+    if (!text) { showToast("订阅链接暂时不可用", true); return; }
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { showToast("订阅链接已复制", false); }).catch(function () { showToast("复制失败，请手动选择订阅链接", true); });
+      return;
+    }
+    var field = document.createElement("textarea");
+    field.className = "clipboard-field";
+    field.value = text;
+    document.body.appendChild(field);
+    field.select();
+    var copied = false;
+    try { copied = document.execCommand("copy"); } catch (error) { copied = false; }
+    field.remove();
+    button.focus();
+    showToast(copied ? "订阅链接已复制" : "复制失败，请手动选择订阅链接", !copied);
   }
 
   function appendField(parent, labelText, field) {
@@ -405,7 +452,14 @@
           }
           updateDashboard(data, preferredRouteRuleID);
           resetNewRouteRuleForm(form, data);
-          showToast(data.message || "操作成功", false);
+          var report = data.singbox_report || {};
+          if (form.id === "nodes-form" && (report.status === "stale" || report.status === "error")) {
+            showToast("节点已保存；sing-box 未同步，请查看转换明细", true);
+          } else if (form.id === "nodes-form" && report.status === "warning" && report.failed) {
+            showToast("节点已保存；sing-box 已跳过 " + report.failed + " 个不兼容节点", false);
+          } else {
+            showToast(data.message || "操作成功", false);
+          }
         })
         .catch(function (error) {
           var message = error && error.message ? error.message : "保存失败";
@@ -416,6 +470,14 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    ["subscription", "singbox"].forEach(function (prefix) {
+      var path = document.getElementById(prefix + "-path");
+      var url = document.getElementById(prefix + "-url");
+      if (path && url) { url.textContent = subscriptionDisplayURL(path.textContent, url.textContent); }
+    });
+    document.querySelectorAll("button[data-copy-target]").forEach(function (button) {
+      button.addEventListener("click", function () { copySubscriptionURL(button); });
+    });
     document.querySelectorAll("form[data-ajax-form]").forEach(bindAjaxForm);
     var select = document.getElementById("route-rule-select");
     if (select) {

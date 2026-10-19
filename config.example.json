@@ -4,6 +4,14 @@
     "port": 12345,
     "admin": "admin",
     "password": "changeMePassword",
+    "singbox": {
+      "allow_partial": false,
+      "mixed_port": 2080,
+      "clash_port": 9090,
+      "disable_clash_api": false,
+      "test_url": "https://www.gstatic.com/generate_204",
+      "test_interval": "10m"
+    },
     "tls": {
       "enabled": false,
       "certFile": "",

@@ -2,6 +2,7 @@ package lib
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"git.local/gosub/model"
 	"github.com/glebarez/sqlite"
@@ -27,7 +29,8 @@ var (
 )
 
 type Store struct {
-	db *gorm.DB
+	db        *gorm.DB
+	singBoxMu sync.Mutex
 }
 
 func (s *Store) Close() error {
@@ -70,7 +73,7 @@ func OpenStore(dbPath string) (*Store, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Node{}, &model.RouteRule{}); err != nil {
+	if err := db.AutoMigrate(&model.Subscription{}, &model.Node{}, &model.RouteRule{}, &model.SingBoxPublication{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite database: %w", err)
 	}
 	if err := restrictFileMode(dbPath); err != nil {
@@ -107,8 +110,10 @@ func (s *Store) Nodes() ([]string, error) {
 }
 
 func (s *Store) ReplaceNodes(nodes []string) error {
+	s.singBoxMu.Lock()
+	defer s.singBoxMu.Unlock()
 	nodes = NormalizeNodes(nodes)
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("1 = 1").Delete(&model.Node{}).Error; err != nil {
 			return fmt.Errorf("delete old nodes: %w", err)
 		}
@@ -119,7 +124,86 @@ func (s *Store) ReplaceNodes(nodes []string) error {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// A failed sing-box export must never roll back the existing Xray node save.
+	_, _, _ = s.syncSingBoxLocked(currentSingBoxOptions())
+	return nil
+}
+
+func currentSingBoxOptions() SingBoxOptions {
+	if settings, err := GetSettings(); err == nil && settings.SingBox != nil {
+		return *settings.SingBox
+	}
+	return SingBoxOptions{}
+}
+
+func (s *Store) SingBoxSubscription(options SingBoxOptions) ([]byte, ConversionReport, error) {
+	s.singBoxMu.Lock()
+	defer s.singBoxMu.Unlock()
+	return s.syncSingBoxLocked(options)
+}
+
+func (s *Store) syncSingBoxLocked(options SingBoxOptions) ([]byte, ConversionReport, error) {
+	nodes, err := s.Nodes()
+	if err != nil {
+		return nil, ConversionReport{}, err
+	}
+	if normalized, optionErr := NormalizeSingBoxOptions(options); optionErr == nil {
+		options = normalized
+	}
+	source, err := json.Marshal(struct {
+		Nodes    []string
+		Options  SingBoxOptions
+		Template string
+	}{nodes, options, SingBoxTemplateVersion})
+	if err != nil {
+		return nil, ConversionReport{}, err
+	}
+	sourceHash := fmt.Sprintf("%x", sha256.Sum256(source))
+	publication := model.SingBoxPublication{ID: subscriptionRecordID}
+	if err := s.db.First(&publication, subscriptionRecordID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ConversionReport{}, fmt.Errorf("load sing-box publication: %w", err)
+	}
+	var report ConversionReport
+	if publication.SourceHash == sourceHash && json.Unmarshal([]byte(publication.ReportJSON), &report) == nil {
+		return []byte(publication.Body), report, nil
+	}
+	body, report := BuildSingBoxConfig(nodes, options)
+	report.SourceHash = sourceHash
+	if len(body) > 0 {
+		publication.Body = string(body)
+		publication.PublishedHash = sourceHash
+		publication.GeneratedAt = time.Now().UTC()
+	} else if report.Status == "disabled" {
+		publication.Body, publication.PublishedHash = "", ""
+		publication.GeneratedAt = time.Time{}
+	} else if publication.Body != "" {
+		report.Status = "stale"
+	}
+	publication.SourceHash = sourceHash
+	report.PublishedHash = publication.PublishedHash
+	if !publication.GeneratedAt.IsZero() {
+		report.GeneratedAt = publication.GeneratedAt.Format(time.RFC3339)
+	}
+	reportJSON, err := json.Marshal(report)
+	if err != nil {
+		return nil, report, err
+	}
+	publication.ReportJSON = string(reportJSON)
+	if err := s.db.Save(&publication).Error; err != nil {
+		return nil, report, fmt.Errorf("save sing-box publication: %w", err)
+	}
+	return []byte(publication.Body), report, nil
+}
+
+func GetSingBoxSubscription() ([]byte, ConversionReport, error) {
+	store, err := DefaultStore()
+	if err != nil {
+		return nil, ConversionReport{}, err
+	}
+	return store.SingBoxSubscription(currentSingBoxOptions())
 }
 
 func (s *Store) EnsureSubscriptionPath() (string, bool, error) {
@@ -179,6 +263,9 @@ func (s *Store) UpdateSubscriptionPath(path string) error {
 		return err
 	}
 	if err := s.validatePathNotUsedByRouteRule(path, 0); err != nil {
+		return err
+	}
+	if err := s.validatePathNotUsedByRouteRule(SingBoxPath(path), 0); err != nil {
 		return err
 	}
 	record := &model.Subscription{ID: subscriptionRecordID, Path: path}
@@ -288,7 +375,7 @@ func (s *Store) RandomRouteRulePath() (string, error) {
 
 func (s *Store) validateRouteRulePath(path string, excludeRouteRuleID uint) error {
 	subscriptionPath, err := s.SubscriptionPath()
-	if err == nil && subscriptionPath == path {
+	if err == nil && (subscriptionPath == path || SingBoxPath(subscriptionPath) == path) {
 		return fmt.Errorf("path already used by subscription")
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {

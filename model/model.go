@@ -37,3 +37,17 @@ type Subscription struct {
 func (Subscription) TableName() string {
 	return "subscription"
 }
+
+type SingBoxPublication struct {
+	ID            uint `gorm:"primaryKey"`
+	SourceHash    string
+	PublishedHash string
+	Body          string `gorm:"type:text"`
+	ReportJSON    string `gorm:"type:text"`
+	GeneratedAt   time.Time
+	UpdatedAt     time.Time
+}
+
+func (SingBoxPublication) TableName() string {
+	return "singbox_publication"
+}
