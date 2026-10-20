@@ -329,7 +329,7 @@ func TestSingBoxTagsAndStrictPolicy(t *testing.T) {
 }
 
 func TestSingBoxInputAndTemplateOptions(t *testing.T) {
-	body, report := BuildSingBoxConfig([]string{" \ufeff" + testVLESS("type=tcp#name") + "\r\n"}, SingBoxOptions{MixedPort: 1080, DisableClashAPI: true})
+	body, report := BuildSingBoxConfig([]string{" \ufeff" + testVLESS("type=tcp#name") + "\r\n"}, SingBoxOptions{Mode: "mixed", MixedPort: 1080, DisableClashAPI: true})
 	if len(body) == 0 || report.Failed != 0 || strings.Contains(string(body), "clash_api") || !strings.Contains(string(body), `"listen_port": 1080`) {
 		t.Fatal("BOM/CRLF or template options not handled")
 	}
@@ -346,10 +346,105 @@ func TestSingBoxInputAndTemplateOptions(t *testing.T) {
 	if body, report := BuildSingBoxConfig([]string{"", " \ufeff\r\n "}, SingBoxOptions{MixedPort: -1}); len(body) != 0 || report.Status != "disabled" {
 		t.Fatal("empty source retained an invalid template instead of disabling publication")
 	}
-	for _, options := range []SingBoxOptions{{MixedPort: -1}, {MixedPort: 9090}, {TestInterval: "1s"}, {TestURL: "file:///secret"}} {
+	for _, options := range []SingBoxOptions{{Mode: "invalid"}, {MixedPort: -1}, {Mode: "mixed", MixedPort: 9090}, {TestInterval: "1s"}, {TestURL: "file:///secret"}} {
 		if body, report := BuildSingBoxConfig([]string{testVLESS("type=tcp")}, options); len(body) != 0 || report.Diagnostics[0].Code != "INVALID_TEMPLATE" {
 			t.Fatal("invalid template accepted")
 		}
+	}
+}
+
+func TestSingBoxTunAndMixedProfiles(t *testing.T) {
+	for _, mode := range []string{"", "tun", "mixed"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			body, report := BuildSingBoxConfig([]string{testVLESS("security=tls#test")}, SingBoxOptions{Mode: mode})
+			if report.Status != "ready" {
+				t.Fatal(report)
+			}
+			var profile struct {
+				Inbounds []struct {
+					Type        string   `json:"type"`
+					Tag         string   `json:"tag"`
+					Listen      string   `json:"listen"`
+					ListenPort  int      `json:"listen_port"`
+					Address     []string `json:"address"`
+					AutoRoute   bool     `json:"auto_route"`
+					StrictRoute bool     `json:"strict_route"`
+					MTU         int      `json:"mtu"`
+				} `json:"inbounds"`
+				DNS struct {
+					Final   string `json:"final"`
+					Servers []struct {
+						Type   string      `json:"type"`
+						Tag    string      `json:"tag"`
+						Server string      `json:"server"`
+						Detour string      `json:"detour"`
+						TLS    *singBoxTLS `json:"tls"`
+					} `json:"servers"`
+				} `json:"dns"`
+				Route struct {
+					Final                 string `json:"final"`
+					AutoDetectInterface   bool   `json:"auto_detect_interface"`
+					DefaultDomainResolver string `json:"default_domain_resolver"`
+					Rules                 []struct {
+						Action string `json:"action"`
+						Port   int    `json:"port"`
+					} `json:"rules"`
+				} `json:"route"`
+			}
+			if err := json.Unmarshal(body, &profile); err != nil {
+				t.Fatal(err)
+			}
+			if len(profile.Inbounds) != 1 || profile.Route.Final != "proxy" {
+				t.Fatal("unexpected inbounds or default outbound")
+			}
+			inbound := profile.Inbounds[0]
+			if mode == "mixed" {
+				if inbound.Type != "mixed" || inbound.Listen != "127.0.0.1" || inbound.ListenPort != 2080 || len(inbound.Address) > 0 || len(profile.DNS.Servers) > 0 {
+					t.Fatal("desktop Mixed profile changed or retained TUN state")
+				}
+				return
+			}
+			if inbound.Type != "tun" || inbound.Tag != "tun-in" || inbound.Listen != "" || inbound.ListenPort != 0 || !inbound.AutoRoute || !inbound.StrictRoute || inbound.MTU != 1500 || len(inbound.Address) != 2 {
+				t.Fatal("TUN is not a dual-stack routed VPN inbound")
+			}
+			if profile.Route.DefaultDomainResolver != "dns-bootstrap" || !profile.Route.AutoDetectInterface || len(profile.Route.Rules) == 0 || profile.Route.Rules[0].Action != "hijack-dns" || profile.Route.Rules[0].Port != 53 {
+				t.Fatal("VPN routing, loop protection or DNS interception missing")
+			}
+			if profile.DNS.Final != "dns-remote" || len(profile.DNS.Servers) != 2 {
+				t.Fatal("VPN DNS configuration missing")
+			}
+			bootstrap, remote := profile.DNS.Servers[0], profile.DNS.Servers[1]
+			if bootstrap.Tag != "dns-bootstrap" || bootstrap.Detour != "direct" || bootstrap.Server != "223.5.5.5" {
+				t.Fatal("node DNS bootstrap can recurse through the proxy")
+			}
+			if remote.Tag != "dns-remote" || remote.Type != "https" || remote.Detour != "proxy" || remote.Server != "1.1.1.1" || remote.TLS == nil || !remote.TLS.Enabled || remote.TLS.Insecure {
+				t.Fatal("application DNS is not sent over verified proxy DoH")
+			}
+		})
+	}
+}
+
+func TestSingBoxModeChangeInvalidatesCacheAndRejectsWrongFallback(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.ReplaceNodes([]string{testVLESS("type=tcp")}); err != nil {
+		t.Fatal(err)
+	}
+	mixed, mixedReport, err := store.SingBoxSubscription(SingBoxOptions{Mode: "mixed"})
+	if err != nil || len(mixed) == 0 || mixedReport.Status != "ready" {
+		t.Fatal("Mixed publication failed")
+	}
+	tun, tunReport, err := store.SingBoxSubscription(SingBoxOptions{Mode: "tun"})
+	if err != nil || len(tun) == 0 || tunReport.Status != "ready" || bytes.Equal(tun, mixed) || tunReport.SourceHash == mixedReport.SourceHash {
+		t.Fatal("mode change reused old publication")
+	}
+	if err := store.ReplaceNodes([]string{"vmess://unsupported"}); err != nil {
+		t.Fatal(err)
+	}
+	if body, report, err := store.SingBoxSubscription(SingBoxOptions{Mode: "mixed"}); err != nil || len(body) != 0 || report.Status != "error" {
+		t.Fatal("a TUN profile was served as a Mixed fallback")
+	}
+	if body, report, err := store.SingBoxSubscription(SingBoxOptions{Mode: "mixed"}); err != nil || len(body) != 0 || report.Status != "error" {
+		t.Fatal("wrong-mode fallback reappeared from cache")
 	}
 }
 
@@ -499,17 +594,21 @@ func TestSingBoxOfficialCheck(t *testing.T) {
 	if binary == "" {
 		t.Skip("set SINGBOX_BINARY to the official sing-box 1.14.3 binary")
 	}
-	fixtures := singBoxFixtures()
-	body, report := BuildSingBoxConfig(fixtures, SingBoxOptions{})
-	if report.Failed != 0 {
-		t.Fatal(report)
-	}
-	path := filepath.Join(t.TempDir(), "profile.json")
-	if err := os.WriteFile(path, body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(binary, "check", "-c", path)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("sing-box check: %v\n%s", err, output)
+	for _, mode := range []string{"tun", "mixed"} {
+		t.Run(mode, func(t *testing.T) {
+			fixtures := append(singBoxFixtures(), "trojan://password@node.example:443?security=tls")
+			body, report := BuildSingBoxConfig(fixtures, SingBoxOptions{Mode: mode})
+			if report.Failed != 0 {
+				t.Fatal(report)
+			}
+			path := filepath.Join(t.TempDir(), "profile.json")
+			if err := os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(binary, "check", "-c", path)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("sing-box check: %v\n%s", err, output)
+			}
+		})
 	}
 }

@@ -53,6 +53,7 @@ func (s *Server) registerRoutes() {
 	s.router.POST("/logout", s.logout)
 	s.router.POST("/subscription-path", s.saveSubscriptionPath)
 	s.router.POST("/nodes", s.saveNodes)
+	s.router.POST("/singbox-settings", s.saveSingBoxSettings)
 	s.router.POST("/route-rules", s.createRouteRule)
 	s.router.POST("/route-rules/:id", s.updateRouteRule)
 	s.router.POST("/route-rules/:id/delete", s.deleteRouteRule)

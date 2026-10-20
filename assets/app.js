@@ -76,6 +76,7 @@
     setText("singbox-url", subscriptionDisplayURL(data.singbox_path, data.singbox_url));
     setText("singbox-path", data.singbox_path || "");
     renderSingBoxReport(data.singbox_report || {}, data.singbox_status_text || "");
+    setValue("singbox-mode", data.singbox_mode || "tun");
     setText("nodes-count", String(data.node_count || 0));
     setText("route-rules-count", String((data.route_rules || []).length));
     setValue("path-input", data.subscription_path || "");
@@ -453,10 +454,12 @@
           updateDashboard(data, preferredRouteRuleID);
           resetNewRouteRuleForm(form, data);
           var report = data.singbox_report || {};
-          if (form.id === "nodes-form" && (report.status === "stale" || report.status === "error")) {
-            showToast("节点已保存；sing-box 未同步，请查看转换明细", true);
-          } else if (form.id === "nodes-form" && report.status === "warning" && report.failed) {
-            showToast("节点已保存；sing-box 已跳过 " + report.failed + " 个不兼容节点", false);
+          var updatesSingBox = form.id === "nodes-form" || form.id === "singbox-settings-form";
+          var savedMessage = form.id === "singbox-settings-form" ? "设置已保存" : "节点已保存";
+          if (updatesSingBox && (report.status === "stale" || report.status === "error")) {
+            showToast(savedMessage + "；sing-box 未同步，请查看转换明细", true);
+          } else if (updatesSingBox && report.status === "warning" && report.failed) {
+            showToast(savedMessage + "；sing-box 已跳过 " + report.failed + " 个不兼容节点", false);
           } else {
             showToast(data.message || "操作成功", false);
           }

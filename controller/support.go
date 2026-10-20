@@ -49,6 +49,7 @@ type DashboardData struct {
 	SingBoxURL        string               `json:"singbox_url"`
 	SingBoxReport     lib.ConversionReport `json:"singbox_report"`
 	SingBoxStatusText string               `json:"singbox_status_text"`
+	SingBoxMode       string               `json:"singbox_mode"`
 	NodesText         string               `json:"nodes_text"`
 	NodeCount         int                  `json:"node_count"`
 	RouteRules        []RouteRule          `json:"route_rules"`
@@ -240,6 +241,10 @@ func (s *Server) loadDashboardData(message string) (DashboardData, error) {
 	if singBoxErr != nil {
 		singBoxReport = lib.ConversionReport{Status: "error", Diagnostics: []lib.ConversionDiagnostic{{Code: "EXPORT_STORAGE_ERROR", Status: "invalid", Message: "sing-box 导出暂时不可用"}}}
 	}
+	singBoxMode := "tun"
+	if cfg.Settings.SingBox != nil && cfg.Settings.SingBox.Mode != "" {
+		singBoxMode = cfg.Settings.SingBox.Mode
+	}
 
 	tlsStatus := "关闭"
 	if cfg.Settings.TLS != nil && cfg.Settings.TLS.Enabled {
@@ -270,6 +275,7 @@ func (s *Server) loadDashboardData(message string) (DashboardData, error) {
 		SingBoxURL:        publicURL(cfg.Settings, lib.SingBoxPath(path)),
 		SingBoxReport:     singBoxReport,
 		SingBoxStatusText: singBoxStatusText(singBoxReport.Status),
+		SingBoxMode:       singBoxMode,
 		NodesText:         strings.Join(cfg.Nodes, "\n"),
 		NodeCount:         len(cfg.Nodes),
 		RouteRules:        routeRules,

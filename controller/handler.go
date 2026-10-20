@@ -151,6 +151,22 @@ func (s *Server) saveNodes(c *gin.Context) {
 	s.respondDashboard(c, statusOK, "节点列表已保存")
 }
 
+func (s *Server) saveSingBoxSettings(c *gin.Context) {
+	if !s.requireWebAuth(c) {
+		return
+	}
+	modes := c.PostFormArray("mode")
+	if len(modes) != 1 || (modes[0] != "tun" && modes[0] != "mixed") {
+		s.respondDashboard(c, statusBadRequest, "请选择有效的 sing-box 运行模式")
+		return
+	}
+	if err := lib.UpdateSingBoxMode(modes[0]); err != nil {
+		s.respondDashboard(c, statusInternalServerError, "sing-box 设置保存失败，请检查配置文件及目录写入权限")
+		return
+	}
+	s.respondDashboard(c, statusOK, "sing-box 设置已保存")
+}
+
 func (s *Server) createRouteRule(c *gin.Context) {
 	if !s.requireWebAuth(c) {
 		return

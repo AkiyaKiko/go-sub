@@ -1,10 +1,112 @@
 package lib
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func TestUpdateSingBoxModePreservesConfigAndPersists(t *testing.T) {
+	configFileMu.RLock()
+	previousPath := configFilePath
+	configFileMu.RUnlock()
+	t.Cleanup(func() { SetConfigPath(previousPath) })
+	for _, rawOptions := range []string{"", `,"singbox":null`, `,"singbox":{"mode":"mixed","mixed_port":2081,"allow_partial":true,"test_interval":"20m"}`} {
+		t.Run(rawOptions, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "config.json")
+			original := []byte(`{"settings":{"host":"127.0.0.1","port":8080,"admin":"test-admin","password":"test-password","path":"/legacy","tls":{"enabled":"ignored","unknown":true}` + rawOptions + `},"nodes":["legacy-node"]}`)
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			SetConfigPath(path)
+			parentBefore, err := os.Stat(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []string{"tun", "mixed"} {
+				if err := UpdateSingBoxMode(mode); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := LoadConfigFile()
+				if err != nil || cfg.Settings.SingBox == nil || cfg.Settings.SingBox.Mode != mode {
+					t.Fatalf("saved mode did not survive reload: %v", err)
+				}
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var before, after map[string]any
+				if err := json.Unmarshal(original, &before); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(content, &after); err != nil {
+					t.Fatal(err)
+				}
+				beforeSettings, afterSettings := before["settings"].(map[string]any), after["settings"].(map[string]any)
+				beforeOptions, _ := beforeSettings["singbox"].(map[string]any)
+				if beforeOptions == nil {
+					beforeOptions = map[string]any{}
+				}
+				beforeOptions["mode"] = mode
+				beforeSettings["singbox"] = beforeOptions
+				if !reflect.DeepEqual(before, after) || afterSettings["singbox"].(map[string]any)["mode"] != mode {
+					t.Fatal("mode save changed unrelated configuration")
+				}
+			}
+			content, _ := os.ReadFile(path)
+			if err := UpdateSingBoxMode("invalid"); err == nil {
+				t.Fatal("invalid mode accepted")
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.Equal(content, after) {
+				t.Fatal("invalid mode changed config")
+			}
+			parentAfter, _ := os.Stat(directory)
+			if parentBefore.Mode() != parentAfter.Mode() {
+				t.Fatal("config save changed parent directory permissions")
+			}
+			files, _ := filepath.Glob(filepath.Join(directory, ".gosub-config-*"))
+			if len(files) > 0 {
+				t.Fatal("temporary config files were retained")
+			}
+		})
+	}
+}
+
+func TestConcurrentSingBoxModeSaveAndConfigReads(t *testing.T) {
+	configFileMu.RLock()
+	previousPath := configFilePath
+	configFileMu.RUnlock()
+	t.Cleanup(func() { SetConfigPath(previousPath) })
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"settings":{"host":"127.0.0.1","port":8080,"admin":"test","password":"test"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	SetConfigPath(path)
+	var workers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			for j := 0; j < 8; j++ {
+				if index%2 == 0 {
+					if err := UpdateSingBoxMode([]string{"tun", "mixed"}[j%2]); err != nil {
+						t.Error(err)
+					}
+				} else if _, err := LoadConfigFile(); err != nil {
+					t.Error("config reader observed an incomplete file")
+				}
+			}
+		}(i)
+	}
+	workers.Wait()
+}
 
 func TestParseConfigTLSByHost(t *testing.T) {
 	tests := []struct {

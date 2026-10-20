@@ -213,6 +213,13 @@ button.copy-button {
   align-items: end;
 }
 
+.singbox-settings-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .route-rule-manager {
   display: grid;
   gap: 14px;
@@ -479,6 +486,7 @@ button:disabled {
 
   .info-grid,
   .inline-form,
+  .singbox-settings-form,
   .route-rule-controls,
   .route-rule-grid {
     grid-template-columns: 1fr;

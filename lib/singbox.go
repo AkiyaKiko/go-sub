@@ -17,12 +17,13 @@ import (
 	"unicode/utf8"
 )
 
-const SingBoxTemplateVersion = "desktop-mixed-v2"
+const SingBoxTemplateVersion = "tun-mixed-v3"
 const maxSingBoxNodes = 2048
 const maxShareURIBytes = 16384
 const maxSingBoxInputBytes = 4 * 1024 * 1024
 
 type SingBoxOptions struct {
+	Mode            string `json:"mode,omitempty"`
 	AllowPartial    bool   `json:"allow_partial,omitempty"`
 	MixedPort       int    `json:"mixed_port,omitempty"`
 	ClashPort       int    `json:"clash_port,omitempty"`
@@ -32,6 +33,12 @@ type SingBoxOptions struct {
 }
 
 func NormalizeSingBoxOptions(options SingBoxOptions) (SingBoxOptions, error) {
+	if options.Mode == "" {
+		options.Mode = "tun"
+	}
+	if options.Mode != "tun" && options.Mode != "mixed" {
+		return options, fmt.Errorf("singbox mode must be tun or mixed")
+	}
 	if options.MixedPort == 0 {
 		options.MixedPort = 2080
 	}
@@ -41,7 +48,7 @@ func NormalizeSingBoxOptions(options SingBoxOptions) (SingBoxOptions, error) {
 	if options.MixedPort < 1 || options.MixedPort > 65535 || options.ClashPort < 1 || options.ClashPort > 65535 {
 		return options, fmt.Errorf("singbox ports must be between 1 and 65535")
 	}
-	if !options.DisableClashAPI && options.MixedPort == options.ClashPort {
+	if options.Mode == "mixed" && !options.DisableClashAPI && options.MixedPort == options.ClashPort {
 		return options, fmt.Errorf("singbox mixed and controller ports must differ")
 	}
 	if options.TestURL == "" {
@@ -202,7 +209,7 @@ func BuildSingBoxConfig(nodes []string, options SingBoxOptions) ([]byte, Convers
 		return nil, report
 	}
 	var outbounds []singBoxOutbound
-	tags := map[string]bool{"proxy": true, "auto": true, "direct": true, "mixed-in": true}
+	tags := map[string]bool{"proxy": true, "auto": true, "direct": true, "mixed-in": true, "tun-in": true}
 	for index, raw := range nodes {
 		raw = normalizeShareLine(raw)
 		if raw == "" {
@@ -278,6 +285,32 @@ func BuildSingBoxConfig(nodes []string, options SingBoxOptions) ([]byte, Convers
 		"inbounds":  []any{map[string]any{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": options.MixedPort}},
 		"outbounds": append(groups, outbounds...),
 		"route":     map[string]any{"final": "proxy"},
+	}
+	if options.Mode == "tun" {
+		config["inbounds"] = []any{map[string]any{
+			"type": "tun", "tag": "tun-in",
+			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
+			"mtu":     1500, "auto_route": true, "strict_route": true,
+		}}
+		// Bootstrap node hostnames directly; sending them through proxy DNS would recurse.
+		config["dns"] = map[string]any{
+			"servers": []any{
+				map[string]any{"type": "udp", "tag": "dns-bootstrap", "server": "223.5.5.5", "server_port": 53, "detour": "direct"},
+				map[string]any{
+					"type": "https", "tag": "dns-remote", "server": "1.1.1.1", "server_port": 443,
+					"path": "/dns-query", "detour": "proxy",
+					"tls": map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"},
+				},
+			},
+			"final": "dns-remote", "strategy": "prefer_ipv4", "independent_cache": true,
+		}
+		config["route"] = map[string]any{
+			"rules": []any{
+				map[string]any{"port": 53, "action": "hijack-dns"},
+				map[string]any{"action": "sniff"},
+			},
+			"auto_detect_interface": true, "default_domain_resolver": "dns-bootstrap", "final": "proxy",
+		}
 	}
 	if !options.DisableClashAPI {
 		config["experimental"] = map[string]any{"clash_api": map[string]any{"external_controller": net.JoinHostPort("127.0.0.1", strconv.Itoa(options.ClashPort))}}

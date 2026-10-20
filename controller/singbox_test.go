@@ -44,6 +44,89 @@ func serveTestRequest(server *Server, method, path string) *httptest.ResponseRec
 	return recorder
 }
 
+func TestSingBoxModeSettingsAuthPersistenceAndPublication(t *testing.T) {
+	server, store := singBoxTestServer(t)
+	if err := store.ReplaceNodes([]string{controllerVLESS}); err != nil {
+		t.Fatal(err)
+	}
+	if response := serveTestRequest(server, "POST", "/singbox-settings"); response.Code != statusSeeOther {
+		t.Fatal("settings save did not require login")
+	}
+	login := httptest.NewRequest("POST", "/login", strings.NewReader("username=test-admin&password=test-password"))
+	login.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loggedIn := httptest.NewRecorder()
+	server.router.ServeHTTP(loggedIn, login)
+	if loggedIn.Code != statusSeeOther || len(loggedIn.Result().Cookies()) != 1 {
+		t.Fatal("test login failed")
+	}
+	cookie := loggedIn.Result().Cookies()[0]
+	t.Cleanup(func() { lib.DeleteSession(cookie.Value) })
+	save := func(values url.Values, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest("POST", "/singbox-settings", strings.NewReader(values.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Accept", "application/json")
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.router.ServeHTTP(response, request)
+		return response
+	}
+	for _, mode := range []string{"mixed", "tun"} {
+		response := save(url.Values{"mode": {mode}}, "http://example.com")
+		var data DashboardData
+		if response.Code != statusOK || json.Unmarshal(response.Body.Bytes(), &data) != nil || data.SingBoxMode != mode || data.SingBoxReport.Status != "ready" {
+			t.Fatalf("mode save failed with status %d", response.Code)
+		}
+		settings, err := lib.GetSettings()
+		if err != nil || settings.SingBox == nil || settings.SingBox.Mode != mode || settings.Admin != "test-admin" || settings.Password != "test-password" {
+			t.Fatal("mode save did not persist or changed credentials")
+		}
+		server = NewServer(os.DirFS(".."))
+		request := httptest.NewRequest("GET", "/", nil)
+		request.AddCookie(cookie)
+		page := httptest.NewRecorder()
+		server.router.ServeHTTP(page, request)
+		if page.Code != statusOK || !strings.Contains(page.Body.String(), `id="singbox-mode"`) || !strings.Contains(page.Body.String(), `value="`+mode+`" selected`) {
+			t.Fatal("page did not restore the persisted mode")
+		}
+		export := serveTestRequest(server, "GET", "/private-token/sing-box")
+		var profile struct {
+			Inbounds []struct {
+				Type string `json:"type"`
+			} `json:"inbounds"`
+		}
+		if export.Code != statusOK || json.Unmarshal(export.Body.Bytes(), &profile) != nil || len(profile.Inbounds) != 1 || profile.Inbounds[0].Type != mode {
+			t.Fatal("saved mode was not reflected in public subscription")
+		}
+		if xray := serveTestRequest(server, "GET", "/private-token"); xray.Body.String() != base64.StdEncoding.EncodeToString([]byte(controllerVLESS)) {
+			t.Fatal("mode setting changed Xray subscription")
+		}
+	}
+	for _, values := range []url.Values{{}, {"mode": {"invalid"}}, {"mode": {"mixed", "tun"}}} {
+		if response := save(values, ""); response.Code != statusBadRequest {
+			t.Fatal("invalid mode was not rejected")
+		}
+	}
+	if response := save(url.Values{"mode": {"mixed"}}, "https://attacker.example"); response.Code != statusForbidden {
+		t.Fatal("cross-origin mode write was accepted")
+	}
+	settings, err := lib.GetSettings()
+	if err != nil || settings.SingBox.Mode != "tun" {
+		t.Fatal("rejected write modified persisted mode")
+	}
+	for _, path := range []string{"/singbox-settings", "/singbox-settings/sub"} {
+		if err := store.UpdateSubscriptionPath(path); err == nil {
+			t.Fatal("subscription path occupied the settings endpoint")
+		}
+		if err := store.CreateRouteRule("conflict", path, `{}`); err == nil {
+			t.Fatal("rule path occupied the settings endpoint")
+		}
+	}
+}
+
 func TestSingBoxSubscriptionAndOriginalXrayBytes(t *testing.T) {
 	var accessLog bytes.Buffer
 	previousWriter := gin.DefaultWriter

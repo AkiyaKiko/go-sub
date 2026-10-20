@@ -180,7 +180,22 @@ func (s *Store) syncSingBoxLocked(options SingBoxOptions) ([]byte, ConversionRep
 		publication.Body, publication.PublishedHash = "", ""
 		publication.GeneratedAt = time.Time{}
 	} else if publication.Body != "" {
-		report.Status = "stale"
+		var previous struct {
+			Inbounds []struct {
+				Type string `json:"type"`
+			} `json:"inbounds"`
+		}
+		mode := options.Mode
+		if mode == "" {
+			mode = "tun"
+		}
+		if json.Unmarshal([]byte(publication.Body), &previous) == nil && len(previous.Inbounds) == 1 && previous.Inbounds[0].Type == mode {
+			report.Status = "stale"
+		} else {
+			// An old Mixed profile cannot satisfy a request for a VPN profile (or vice versa).
+			publication.Body, publication.PublishedHash = "", ""
+			publication.GeneratedAt = time.Time{}
+		}
 	}
 	publication.SourceHash = sourceHash
 	report.PublishedHash = publication.PublishedHash

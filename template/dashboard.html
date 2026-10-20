@@ -4,8 +4,8 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>gosub 管理</title>
-    <link rel="stylesheet" href="/assets/app.css?v=20261019"/>
-    <script src="/assets/app.js?v=20261019" defer></script>
+    <link rel="stylesheet" href="/assets/app.css?v=20261020"/>
+    <script src="/assets/app.js?v=20261020" defer></script>
   </head>
   <body>
     <main class="shell">
@@ -99,6 +99,20 @@
           </label>
           <button class="ghost" type="submit" name="submit_action" value="random">随机并保存</button>
           <button class="primary" type="submit" name="submit_action" value="save">保存路径</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">sing-box 订阅设置</h2>
+        <form class="singbox-settings-form" id="singbox-settings-form" method="post" action="/singbox-settings" data-ajax-form>
+          <label>
+            <span class="label">运行模式</span>
+            <select id="singbox-mode" name="mode" required>
+              <option value="tun" {{if eq .SingBoxMode "tun"}}selected{{end}}>TUN / VPN（手机）</option>
+              <option value="mixed" {{if eq .SingBoxMode "mixed"}}selected{{end}}>Mixed 代理端口（桌面）</option>
+            </select>
+          </label>
+          <button class="primary" type="submit">保存设置</button>
         </form>
       </section>
 

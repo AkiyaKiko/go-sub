@@ -5,6 +5,7 @@
     "admin": "admin",
     "password": "changeMePassword",
     "singbox": {
+      "mode": "tun",
       "allow_partial": false,
       "mixed_port": 2080,
       "clash_port": 9090,

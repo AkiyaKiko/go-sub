@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -58,14 +59,10 @@ func SetConfigPath(path string) {
 	configFilePath = path
 }
 
-func getConfigPath() string {
+func LoadConfigFile() (*Config, error) {
 	configFileMu.RLock()
 	defer configFileMu.RUnlock()
-	return configFilePath
-}
-
-func LoadConfigFile() (*Config, error) {
-	path := getConfigPath()
+	path := configFilePath
 	if path == "" {
 		return nil, fmt.Errorf("config path not set")
 	}
@@ -77,6 +74,76 @@ func LoadConfigFile() (*Config, error) {
 	defer f.Close()
 
 	return ParseConfig(f)
+}
+
+func UpdateSingBoxMode(mode string) error {
+	if mode != "tun" && mode != "mixed" {
+		return fmt.Errorf("singbox mode must be tun or mixed")
+	}
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+	path := configFilePath
+	if path == "" {
+		return fmt.Errorf("config path not set")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if _, err := ParseConfig(bytes.NewReader(content)); err != nil {
+		return err
+	}
+	// Patch only this option, preserving ignored legacy fields and loopback TLS verbatim.
+	var document map[string]json.RawMessage
+	var settings map[string]json.RawMessage
+	var options map[string]json.RawMessage
+	if err := json.Unmarshal(content, &document); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(document["settings"], &settings); err != nil {
+		return err
+	}
+	if raw := settings["singbox"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &options); err != nil {
+			return err
+		}
+	}
+	if options == nil {
+		options = map[string]json.RawMessage{}
+	}
+	options["mode"], err = json.Marshal(mode)
+	if err != nil {
+		return err
+	}
+	settings["singbox"], err = json.Marshal(options)
+	if err != nil {
+		return err
+	}
+	document["settings"], err = json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".gosub-config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := temporary.Write(append(encoded, '\n')); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), path)
 }
 
 func ParseConfig(r io.Reader) (*Config, error) {
@@ -214,6 +281,7 @@ func isReservedPublicPath(path string) bool {
 		"/nodes",
 		"/route-rules",
 		"/subscription-path",
+		"/singbox-settings",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true

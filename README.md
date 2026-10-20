@@ -6,6 +6,7 @@ gosub 是一个本地代理订阅管理服务。当前技术栈为 Gin + GORM + 
 
 - 订阅分发：访问保存的订阅路径时，返回 Base64 编码后的节点列表。
 - sing-box 订阅：支持 VLESS、Shadowsocks、VMess、Trojan、Hysteria 1/2、TUIC v5、AnyTLS、HTTP(S) 和 SOCKS5 分享链接，本地生成独立的完整 sing-box JSON 配置，原 Xray URL 和 Base64 输出保持不变。
+- sing-box 模式：默认生成手机 TUN / VPN 配置；后台下拉切换为桌面 Mixed 代理端口模式，设置持久化后立即作用于原订阅 URL。
 - 管理后台：登录后可编辑订阅路径、节点列表和路由规则。
 - 当前服务：展示所有路由规则的名称和订阅路径，新增、修改、删除后自动更新。
 - 路由规则订阅：可维护多条独立 JSON 规则，每条规则都有独立访问 URL。
@@ -30,7 +31,7 @@ gosub/
 ├─ model/
 │  └─ model.go                # GORM 模型：节点、订阅路径、路由规则、sing-box 发布缓存
 ├─ lib/
-│  ├─ config.go               # config.json 加载、解析、校验、鉴权比较、路径校验
+│  ├─ config.go               # config.json 加载、解析、校验、模式设置原子保存、鉴权/路径校验
 │  ├─ config_test.go          # 本地监听忽略 TLS 和其他监听地址的配置校验测试
 │  ├─ store.go                # SQLite/GORM 初始化、迁移、节点/订阅/路由规则 CRUD
 │  ├─ session.go              # 内存 session 存储和 session token 生成
@@ -149,12 +150,34 @@ go run .
 
 协议解析方式参考 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 的 [URI parser](https://github.com/sub-store-org/Sub-Store/blob/master/backend/src/core/proxy-utils/parsers/index.js) 和 [sing-box producer](https://github.com/sub-store-org/Sub-Store/blob/master/backend/src/core/proxy-utils/producers/sing-box.js)。实现为本地 Go 转换器，不运行 Sub-Store / Node.js，不向第三方上传节点，也不执行分享链接携带的脚本或插件程序；支持范围以本节和测试为准，并非完整移植 Sub-Store。
 
-默认输出是桌面 Mixed 模板：`127.0.0.1:2080` 入站、`proxy` 手动选择组、`auto` 自动测速组、`direct` 出站，默认路由走 `proxy`。Clash API 仅监听 `127.0.0.1:9090`。此模板不是手机 TUN/VPN 全局代理配置，也没有内置复杂分流策略。
+### 运行模式
+
+在后台“sing-box 订阅设置”的“运行模式”下拉框中选择并保存：
+
+| 模式 | 配置内容 | 使用场景 |
+| --- | --- | --- |
+| TUN / VPN（默认） | 双栈 TUN 入站、自动路由、DNS 接管、代理 DoH、出站防环路设置；不再只开放 Mixed 端口 | Android / iOS 的 sing-box VPN 客户端，也可用于具备 TUN 权限的桌面客户端 |
+| Mixed 代理端口 | 仅监听 `127.0.0.1:2080` 的 HTTP/SOCKS 代理端口，不接管系统流量 | 桌面应用手动配置代理，或交由其他程序接管流量 |
+
+两个模式共用 `proxy` 手动选择组、`auto` 测速组、`direct` 出站，默认路由走 `proxy`；均未内置地域分流规则。Clash API 默认仅监听 `127.0.0.1:9090`，可通过 `disable_clash_api` 关闭。TUN 不固定接口名称，不启用 Linux 专用 `auto_redirect`，由手机 VPN 客户端创建虚拟网卡。
+
+TUN 模板使用 `172.19.0.1/30` 和 `fdfe:dcba:9876::1/126` 地址、1500 MTU、`auto_route` / `strict_route`；TCP/UDP 53 端口请求交给 sing-box DNS。应用域名通过代理访问 Cloudflare DoH（`1.1.1.1`，验证 `cloudflare-dns.com` TLS 证书）；连接代理前，代理服务器域名通过直连 `223.5.5.5:53` 引导解析，避免“解析代理需要先连接代理”的循环。引导解析未加密，网络 DNS 提供方可看到代理服务器域名；普通应用的 DNS 默认不走此直连解析器。此模板不拦截应用自带的 DoH/DoT，也不能代替客户端自身的权限和泄漏防护设置。
+
+旧配置未指定 `settings.singbox.mode` 时，升级后默认改为 TUN。需要保留原桌面端口方式时，明确选择 Mixed 或设置 `"mode": "mixed"`。后台仅修改此字段，使用同目录 `0600` 临时文件写入后替换 `config.json`，保留管理员、TLS、其他 sing-box 选项和旧兼容字段，不修改父目录权限。服务账号需有配置文件所在目录的写权限，不需要重启服务。
+
+手机端更新步骤：
+
+1. 后台选择“TUN / VPN（手机）”，保存后确认 sing-box 状态为“已同步”。
+2. 在手机 sing-box 客户端刷新原 sing-box 远程配置，或重新导入同一个 `{subscription_path}/sing-box` 地址；不是 Xray Base64 地址。
+3. 停止并重新启动该配置，允许系统 VPN 权限。桌面使用 TUN 时同样需要相应系统权限。
+
+手机客户端版本需支持生成的配置字段。测试使用官方 sing-box 1.14.3；配置检查通过并不表示已在 Android / iOS 真机上连接成功。代理服务器、网络、客户端版本或 VPN 权限异常仍可能导致无法访问。
 
 可在 `config.json` 的 `settings` 内增加可选的 `singbox` 配置：
 
 ```json
 "singbox": {
+  "mode": "tun",
   "allow_partial": false,
   "mixed_port": 2080,
   "clash_port": 9090,
@@ -164,11 +187,13 @@ go run .
 }
 ```
 
-默认严格模式下，只要有节点转换失败，本次 sing-box 配置就不发布，Xray 仍正常保存。已有有效配置时继续提供上次版本，后台显示“未同步”；没有有效版本时返回 HTTP 503。设置 `allow_partial: true` 可明确允许跳过不兼容节点，但至少需要一个可用节点，并在后台展示跳过数量。主动清空节点会停用 sing-box 输出，不会继续提供历史凭据。
+默认严格模式下，只要有节点转换失败，本次 sing-box 配置就不发布，Xray 仍正常保存。已有相同运行模式的有效配置时继续提供上次版本，后台显示“未同步”；没有有效版本时返回 HTTP 503。切换模式后不回退到另一模式的旧配置，防止手机再次收到 Mixed 模板。设置 `allow_partial: true` 可明确允许跳过不兼容节点，但至少需要一个可用节点，并在后台展示跳过数量。主动清空节点会停用 sing-box 输出，不会继续提供历史凭据。
 
-配置按原始节点、模板版本和选项的内容哈希缓存；新增协议后转换版本已更新，旧版本曾失败的节点会自动重新转换，无需重新保存。节点保存和发布串行处理，完整产物保存到数据库，重启后仍可使用上次有效版本。GET 返回原始 JSON，HEAD 返回同样的状态及内容长度；两者均使用 `Cache-Control: no-store`，不对外返回转换报告。新 sing-box 订阅请求不会在 GoSub 访问日志中记录其路径 Token；Nginx 等外层代理的日志需由部署者另行管理。
+配置按原始节点、模板版本和选项（含运行模式）的内容哈希缓存；模板升级或模式变更会触发重新转换，无需重新保存节点。节点保存和发布串行处理，完整产物保存到数据库，重启后仍可使用上次有效版本。GET 返回原始 JSON，HEAD 返回同样的状态及内容长度；两者均使用 `Cache-Control: no-store`，不对外返回转换报告。新 sing-box 订阅请求不会在 GoSub 访问日志中记录其路径 Token；Nginx 等外层代理的日志需由部署者另行管理。
 
 字段规范与验证使用 [sing-box 1.14.3](https://github.com/SagerNet/sing-box/releases/tag/v1.14.3)、[VLESS](https://sing-box.sagernet.org/configuration/outbound/vless/)、[Shadowsocks](https://sing-box.sagernet.org/configuration/outbound/shadowsocks/)、[TLS](https://sing-box.sagernet.org/configuration/shared/tls/) 和 [V2Ray Transport](https://sing-box.sagernet.org/configuration/shared/v2ray-transport/) 官方文档。`sing-box check` 仅证明配置结构可加载，不代表实际服务器连通，也不等同于 Android/iOS 的 VPN 模板验收。
+
+VPN 模板参照 [TUN](https://sing-box.sagernet.org/configuration/inbound/tun/)、[DNS over HTTPS](https://sing-box.sagernet.org/configuration/dns/server/https/)、[Route](https://sing-box.sagernet.org/configuration/route/) 和 [hijack-dns](https://sing-box.sagernet.org/configuration/route/rule_action/#hijack-dns) 官方文档。CI 对 TUN 和 Mixed 两套完整配置分别执行 `sing-box check`，包含以域名为服务器地址的节点。
 
 新增协议的字段参照 [VMess](https://sing-box.sagernet.org/configuration/outbound/vmess/)、[Trojan](https://sing-box.sagernet.org/configuration/outbound/trojan/)、[Hysteria](https://sing-box.sagernet.org/configuration/outbound/hysteria/)、[Hysteria 2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/)、[TUIC](https://sing-box.sagernet.org/configuration/outbound/tuic/)、[AnyTLS](https://sing-box.sagernet.org/configuration/outbound/anytls/)、[HTTP](https://sing-box.sagernet.org/configuration/outbound/http/) 和 [SOCKS](https://sing-box.sagernet.org/configuration/outbound/socks/) 官方文档，以及 [v2rayN VMess 分享格式](https://github.com/2dust/v2rayN/wiki/Description-of-VMess-share-link)、[Hysteria 2 URI](https://v2.hysteria.network/docs/developers/URI-Scheme/) 和 [AnyTLS URI](https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md)。
 
@@ -211,6 +236,7 @@ sudo systemctl start gosub
 - `POST /api/change_nodes`：可重复表单参数 `nodes`
 - `GET {subscription_path}`：返回 Base64 订阅文本
 - `GET/HEAD {subscription_path}/sing-box`：返回完整 sing-box JSON / 响应元数据
+- `POST /singbox-settings`：登录后以表单 `mode=tun` 或 `mode=mixed` 保存运行模式；受同源写请求保护，返回更新后的后台页面或 JSON（`Accept: application/json`），包含 `singbox_mode` 和转换报告
 - `GET {route_rule_path}`：返回对应路由规则 JSON
 
 管理后台表单接口同样使用 `session_id` Cookie：
@@ -262,7 +288,7 @@ go build -trimpath -ldflags "-s -w" -o gosub .
 go test ./...
 ```
 
-指定官方 sing-box 程序后，同一组测试还会校验包含各类受支持节点的完整配置（程序仅执行 `check`，不会启动代理服务）：
+指定官方 sing-box 程序后，同一组测试还会分别校验包含各类受支持节点的完整 TUN / Mixed 配置（程序仅执行 `check`，不会启动代理或 VPN 服务）：
 
 ```powershell
 $env:SINGBOX_BINARY = "C:\path\to\sing-box.exe"
