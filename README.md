@@ -41,8 +41,6 @@ gosub/
 │  ├─ singbox_test.go         # 转换、缓存/并发、官方 check 和 DNS 启动测试
 │  ├─ singbox_template.go     # 内置预设、模板校验、SQLite 保存、节点和选择组注入
 │  ├─ singbox_template_test.go # 旧库迁移、模板保真、非法配置、持久化和缓存隔离测试
-│  ├─ preset/
-│  │  └─ singbox.tun.json     # 嵌入程序的本地 TUN 预设，发布时附带为示例文件
 │  └─ store_test.go           # 存储层和路径/JSON 校验测试
 ├─ assets/
 │  ├─ app.css                 # 管理后台样式，通过 go:embed 打进二进制
@@ -175,10 +173,9 @@ go run .
 
 在后台“配置管理”点击“编辑模板”，可粘贴完整 JSON、载入预设、修改并保存。编辑器位于弹窗中，不占用主页；保存失败会保留数据库中的原模板。首次打开即显示已保存模板，而不是空白填写示例。
 
-预设与运行数据分开管理：
+模板仅由程序内置默认值和 SQLite 运行数据管理，不提供独立模板文件：
 
-- 源码预设：[`lib/preset/singbox.tun.json`](lib/preset/singbox.tun.json)，通过 `go:embed` 内嵌，单独部署二进制也能初始化模板。
-- 发布包示例：`singbox.template.example.json`，与源码预设内容一致，可以复制后修改；发布包不携带实际运行模板。
+- 内置预设：默认值定义在 [`lib/singbox_template.go`](lib/singbox_template.go)，随程序编译，用于初始化 SQLite 模板及网页“载入预设”。无需部署、读取或维护额外 JSON 文件。
 - 运行模板：保存在 `gosub.db` 的 `singbox_template` 表中。仅在无模板记录时根据 `settings.singbox` 选项和内置预设初始化；后续启动、升级和预设更新不覆盖已保存模板。不读取、导入或生成独立的运行模板 JSON 文件。
 
 网页提供两种本地预设，载入后可修改，点击“保存模板”才写入 SQLite 并更新订阅：
@@ -207,7 +204,7 @@ go run .
 
 这个片段仅演示节点注入，不是手机 VPN 完整模板；手机请基于本地 TUN 预设修改。选择组成员缺失或为空数组时也会自动加入所有节点；显式填写其他成员时保留其顺序并去重。模板内静态出站和端点保留，自动节点与其标签冲突时添加稳定后缀。占位符只在上述组成员数组中展开，不用于替换任意文本，也不支持按地区筛选。
 
-模板必须是标准 JSON 对象，不支持注释或尾随逗号，最多 512 KiB、64 层嵌套。保存时检查重复 JSON 字段、出站标签、组成员引用、选择组循环、`default`、`route.final` 及已知的空 direct DNS detour 问题。校验不是完整的 sing-box 配置 schema 检查；自定义字段和客户端版本兼容性应通过对应版本的 `sing-box check -c <生成配置.json>` 验证。预设包含占位符，应检查最终生成的订阅，而不是直接检查预设文件。
+模板必须是标准 JSON 对象，不支持注释或尾随逗号，最多 512 KiB、64 层嵌套。保存时检查重复 JSON 字段、出站标签、组成员引用、选择组循环、`default`、`route.final` 及已知的空 direct DNS detour 问题。校验不是完整的 sing-box 配置 schema 检查；自定义字段和客户端版本兼容性应通过对应版本的 `sing-box check -c <生成配置.json>` 验证。预设包含占位符，应检查最终生成的订阅 JSON，而不是编辑器中的模板草稿。
 
 TUN 模板使用 `172.19.0.1/30` 和 `fdfe:dcba:9876::1/126` 地址、1500 MTU、`auto_route` / `strict_route`；TCP/UDP 53 端口请求交给 sing-box DNS。应用域名通过代理访问 Cloudflare DoH（`1.1.1.1`，验证 `cloudflare-dns.com` TLS 证书）；连接代理前，代理服务器域名通过直连 `223.5.5.5:53` 引导解析，避免“解析代理需要先连接代理”的循环。引导解析未加密，网络 DNS 提供方可看到代理服务器域名；普通应用的 DNS 默认不走此直连解析器。此模板不拦截应用自带的 DoH/DoT，也不能代替客户端自身的权限和泄漏防护设置。
 
@@ -251,7 +248,7 @@ VPN 模板参照 [TUN](https://sing-box.sagernet.org/configuration/inbound/tun/)
 
 ## Linux 部署与更新
 
-发布包仅包含对应平台的可执行文件、`config.example.json`、`singbox.template.example.json` 和 `README.md`。归档不包含 `./` 目录条目，也不包含实际运行的 `config.json` 或 `gosub.db`。tar 包内文件使用数字 UID/GID `0:0`，可执行文件权限为 `0755`，示例配置和文档为 `0644`，不会携带构建机器的用户或组信息。
+发布包仅包含对应平台的可执行文件、`config.example.json` 和 `README.md`，不附带 sing-box 模板文件。归档不包含 `./` 目录条目，也不包含实际运行的 `config.json` 或 `gosub.db`。tar 包内文件使用数字 UID/GID `0:0`，可执行文件权限为 `0755`，示例配置和文档为 `0644`，不会携带构建机器的用户或组信息。
 
 发布前会检查文件清单、类型、属主、权限，并在 Linux 临时目录中试解压，确认目标目录的权限和所有权以及已有配置、数据库内容保持不变。tar 包还会以 root 身份在独立临时目录中重复验证，覆盖 root 默认恢复属主的场景。包含目录、链接、重复条目或额外文件的归档会阻止发布。
 
@@ -270,7 +267,7 @@ sudo install -m 0755 "$gosub_stage/gosub_linux_amd64" "$gosub_install_dir/gosub"
 sudo systemctl start gosub
 ```
 
-更新时保留原有 `WorkingDirectory`、配置和数据库位置；首次安装还需要先配置服务。不要用示例覆盖已有 `config.json`，不要删除旧数据库。需要本地修改起点时可取出 `singbox.template.example.json`，修改后在网页粘贴保存。
+更新时保留原有 `WorkingDirectory`、配置和数据库位置；首次安装还需要先配置服务。不要用示例覆盖已有 `config.json`，不要删除旧数据库。sing-box 模板直接在网页编辑并保存到 SQLite，已有模板不会被升级覆盖。
 
 `--no-same-owner` 避免恢复归档中的属主，`--no-overwrite-dir` 保留已有目录的权限和所有权。不要直接在 `/root` 或 `/` 中解压旧包，也不要通过递归 `chown` 或 `chmod` 修复部署目录。[GNU tar 参数说明](https://www.gnu.org/software/tar/manual/html_node/Option-Summary.html)
 

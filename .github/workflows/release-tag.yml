@@ -113,7 +113,6 @@ jobs:
           mkdir -p package release
           cp "dist/${bin_name}" package/
           cp config.example.json package/
-          cp lib/preset/singbox.tun.json package/singbox.template.example.json
           cp README.md package/
 
           if [ "${GOOS}" = "windows" ]; then

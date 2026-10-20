@@ -154,7 +154,7 @@ func TestTemplateDatabaseWriteFailurePreservesPreviousValue(t *testing.T) {
 }
 
 func FuzzSingBoxTemplate(f *testing.F) {
-	for _, seed := range []string{`{}`, string(singBoxTUNPreset), `{"outbounds":[{"type":"selector","tag":"loop","outbounds":["loop"]}]}`, `{"dns":{"servers":[null]}}`, `{"route":{"final":[]}}`, `{"outbounds":null}`, `{"future":{"key":1,"key":2}}`, strings.Repeat("[", 70)} {
+	for _, seed := range []string{`{}`, singBoxTUNPreset, `{"outbounds":[{"type":"selector","tag":"loop","outbounds":["loop"]}]}`, `{"dns":{"servers":[null]}}`, `{"route":{"final":[]}}`, `{"outbounds":null}`, `{"future":{"key":1,"key":2}}`, strings.Repeat("[", 70)} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, raw string) {

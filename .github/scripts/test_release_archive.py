@@ -20,7 +20,7 @@ class ReleaseArchiveTests(unittest.TestCase):
 
     def members(self):
         result = []
-        for name, mode in ((self.binary_name, 0o755), ("config.example.json", 0o644), ("singbox.template.example.json", 0o644), ("README.md", 0o644)):
+        for name, mode in ((self.binary_name, 0o755), ("config.example.json", 0o644), ("README.md", 0o644)):
             member = tarfile.TarInfo(name)
             member.mode = mode
             member.size = 4
@@ -42,10 +42,9 @@ class ReleaseArchiveTests(unittest.TestCase):
         package.mkdir(mode=0o700)
         (package / "config.example.json").write_bytes(b"example")
         (package / "README.md").write_bytes(b"readme")
-        (package / "singbox.template.example.json").write_bytes(b"example template")
+        (package / "unexpected.json").write_bytes(b"excluded extra file")
         (package / "config.json").write_bytes(b"private configuration")
         (package / "gosub.db").write_bytes(b"private database")
-        (package / "singbox.template.json").write_bytes(b"private template")
         for system in ("linux", "darwin", "windows"):
             for architecture in ("amd64", "arm64"):
                 with self.subTest(system=system, architecture=architecture):
@@ -57,6 +56,14 @@ class ReleaseArchiveTests(unittest.TestCase):
                     archive = Path(self.temporary.name) / (system + architecture + suffix)
                     create_archive(archive, binary, package)
                     verify_archive(archive, binary)
+                    if suffix == ".zip":
+                        with zipfile.ZipFile(archive) as packed:
+                            names = packed.namelist()
+                    else:
+                        with tarfile.open(archive, "r:gz") as packed:
+                            names = packed.getnames()
+                    self.assertEqual(set(names), {binary, "config.example.json", "README.md"})
+                    self.assertEqual(len(names), 3)
 
     def test_refuses_source_directory(self):
         package = Path(self.temporary.name) / "package"
@@ -75,7 +82,7 @@ class ReleaseArchiveTests(unittest.TestCase):
             verify_archive(self.archive_path, self.binary_name)
 
     def test_rejects_unsafe_or_unexpected_paths(self):
-        for name in (".", "../escape", "/absolute", "nested/file", "config.json", "gosub.db", "singbox.template.json"):
+        for name in (".", "../escape", "/absolute", "nested/file", "config.json", "gosub.db", "unexpected.json"):
             with self.subTest(name=name):
                 members = self.members()
                 members[0].name = name
@@ -125,6 +132,15 @@ class ReleaseArchiveTests(unittest.TestCase):
         members[1] = members[0]
         self.write_tar(members)
         with self.assertRaises(ValueError):
+            verify_archive(self.archive_path, self.binary_name)
+
+    def test_rejects_extra_file(self):
+        members = self.members()
+        extra = tarfile.TarInfo("unexpected.json")
+        extra.size = 4
+        extra.mode = 0o644
+        self.write_tar(members + [extra])
+        with self.assertRaisesRegex(ValueError, "exactly"):
             verify_archive(self.archive_path, self.binary_name)
 
     def write_zip(self, unsafe=False):

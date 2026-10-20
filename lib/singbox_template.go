@@ -3,7 +3,6 @@ package lib
 import (
 	"bytes"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,15 +19,47 @@ import (
 const maxSingBoxTemplateBytes = 512 * 1024
 const singBoxNodesPlaceholder = "{{nodes}}"
 
-//go:embed preset/singbox.tun.json
-var singBoxTUNPreset []byte
+const singBoxTUNPreset = `{
+  "log": { "level": "warn" },
+  "dns": {
+    "servers": [
+      { "type": "udp", "tag": "dns-bootstrap", "server": "223.5.5.5", "server_port": 53 },
+      {
+        "type": "https", "tag": "dns-remote", "server": "1.1.1.1", "server_port": 443,
+        "path": "/dns-query", "detour": "proxy",
+        "tls": { "enabled": true, "server_name": "cloudflare-dns.com" }
+      }
+    ],
+    "final": "dns-remote", "strategy": "prefer_ipv4", "independent_cache": true
+  },
+  "inbounds": [
+    {
+      "type": "tun", "tag": "tun-in",
+      "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+      "mtu": 1500, "auto_route": true, "strict_route": true
+    }
+  ],
+  "outbounds": [
+    { "type": "selector", "tag": "proxy", "outbounds": ["auto", "direct", "{{nodes}}"], "default": "auto" },
+    {
+      "type": "urltest", "tag": "auto", "outbounds": ["{{nodes}}"],
+      "url": "https://www.gstatic.com/generate_204", "interval": "10m"
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "rules": [ { "port": 53, "action": "hijack-dns" }, { "action": "sniff" } ],
+    "auto_detect_interface": true, "default_domain_resolver": "dns-bootstrap", "final": "proxy"
+  },
+  "experimental": { "clash_api": { "external_controller": "127.0.0.1:9090" } }
+}`
 
 func DefaultSingBoxTemplate(options SingBoxOptions) ([]byte, error) {
 	options, err := NormalizeSingBoxOptions(options)
 	if err != nil {
 		return nil, err
 	}
-	config, err := parseSingBoxTemplate(singBoxTUNPreset)
+	config, err := parseSingBoxTemplate([]byte(singBoxTUNPreset))
 	if err != nil {
 		return nil, err
 	}
