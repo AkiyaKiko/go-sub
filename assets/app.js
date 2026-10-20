@@ -132,45 +132,6 @@
     showToast(copied ? "订阅链接已复制" : "复制失败，请手动选择订阅链接", !copied);
   }
 
-  function appendField(parent, labelText, field) {
-    var label = document.createElement("label");
-    var labelSpan = document.createElement("span");
-    labelSpan.className = "label";
-    labelSpan.textContent = labelText;
-    label.appendChild(labelSpan);
-    label.appendChild(field);
-    parent.appendChild(label);
-  }
-
-  function createInput(name, value, placeholder) {
-    var input = document.createElement("input");
-    input.name = name;
-    input.value = value || "";
-    input.placeholder = placeholder || "";
-    input.required = true;
-    return input;
-  }
-
-  function createTextarea(name, value) {
-    var textarea = document.createElement("textarea");
-    textarea.name = name;
-    textarea.spellcheck = false;
-    textarea.value = value || "";
-    return textarea;
-  }
-
-  function createButton(className, name, value, text) {
-    var button = document.createElement("button");
-    button.className = className;
-    button.type = "submit";
-    if (name) {
-      button.name = name;
-      button.value = value;
-    }
-    button.textContent = text;
-    return button;
-  }
-
   function findRouteRule(routeRules, id) {
     for (var i = 0; i < routeRules.length; i += 1) {
       if (String(routeRules[i].id) === String(id)) {
@@ -242,98 +203,32 @@
     return selectedRouteRuleID;
   }
 
-  function createRouteRuleEditor(rule) {
-    var card = document.createElement("details");
-    card.className = "route-rule-card";
-
-    var summary = document.createElement("summary");
-    summary.className = "route-rule-summary";
-    var summaryTitle = document.createElement("span");
-    summaryTitle.className = "route-rule-summary-title";
-    summaryTitle.textContent = rule.name || "路由规则";
-    var summaryPath = document.createElement("span");
-    summaryPath.className = "route-rule-summary-path";
-    summaryPath.textContent = rule.path || "";
-    var summaryContent = document.createElement("span");
-    summaryContent.className = "route-rule-summary-content";
-    summaryContent.appendChild(summaryTitle);
-    summaryContent.appendChild(summaryPath);
-    summary.appendChild(summaryContent);
-    card.appendChild(summary);
-
-    var body = document.createElement("div");
-    body.className = "route-rule-card-body";
-
-    var form = document.createElement("form");
-    form.className = "route-rule-form";
-    form.method = "post";
-    form.setAttribute("action", "/route-rules/" + rule.id);
-    form.setAttribute("data-ajax-form", "");
-
-    var grid = document.createElement("div");
-    grid.className = "route-rule-grid";
-    appendField(grid, "名称", createInput("name", rule.name, "路由规则"));
-    appendField(grid, "路径", createInput("path", rule.path, "/rule-path"));
-    form.appendChild(grid);
-
-    var info = document.createElement("div");
-    info.className = "info-item";
-    var infoLabel = document.createElement("span");
-    infoLabel.className = "label";
-    infoLabel.textContent = "访问 URL";
-    var url = document.createElement("div");
-    url.className = "value";
-    url.textContent = rule.url || "";
-    info.appendChild(infoLabel);
-    info.appendChild(url);
-    form.appendChild(info);
-
-    appendField(form, "JSON 内容", createTextarea("content", rule.content));
-
-    var footer = document.createElement("div");
-    footer.className = "footer-row";
-    var id = document.createElement("span");
-    id.className = "muted";
-    id.textContent = "ID " + rule.id;
-    var actions = document.createElement("div");
-    actions.className = "button-row";
-    actions.appendChild(createButton("ghost", "submit_action", "random", "随机路径并保存"));
-    actions.appendChild(createButton("primary", "submit_action", "save", "保存规则"));
-    footer.appendChild(id);
-    footer.appendChild(actions);
-    form.appendChild(footer);
-
-    body.appendChild(form);
-    card.appendChild(body);
-    bindAjaxForm(form);
-    return card;
+  function renderRouteRuleSelection(selectedID) {
+    var rule = findRouteRule(routeRulesState, selectedID);
+    setText("route-rule-url", rule ? subscriptionDisplayURL(rule.path, rule.url) : "");
+    document.getElementById("open-edit-route-rule").disabled = !rule;
+    document.getElementById("copy-route-rule-url").disabled = !rule;
   }
 
-  function renderRouteRuleEditor(selectedID) {
-    var editor = document.getElementById("route-rule-editor");
-    if (!editor) {
-      return;
-    }
-
-    editor.innerHTML = "";
-    if (!routeRulesState.length) {
-      var empty = document.createElement("p");
-      empty.className = "muted empty-state";
-      empty.textContent = "还没有路由规则。";
-      editor.appendChild(empty);
-      return;
-    }
-
-    var rule = findRouteRule(routeRulesState, selectedID) || routeRulesState[0];
-    selectedRouteRuleID = String(rule.id);
-    editor.appendChild(createRouteRuleEditor(rule));
+  function openEditRouteRuleDialog() {
+    var rule = findRouteRule(routeRulesState, selectedRouteRuleID);
+    if (!rule) { return; }
+    var form = document.getElementById("edit-route-rule-form");
+    if (form.dataset.saving === "true") { return; }
+    form.setAttribute("action", "/route-rules/" + rule.id);
+    form.dataset.ruleId = String(rule.id);
+    setValue("route-rule-name-input", rule.name || "");
+    setValue("route-rule-path-input", rule.path || "");
+    setValue("route-rule-content-input", rule.content || "");
+    setText("edit-route-rule-url", subscriptionDisplayURL(rule.path, rule.url));
+    openDialog(document.getElementById("edit-route-rule-dialog"));
   }
 
   function renderRouteRules(routeRules, selectedID) {
     routeRulesState = routeRules.slice();
     renderRouteRulePaths(routeRulesState);
     var nextSelectedID = renderRouteRuleOptions(routeRulesState, selectedID);
-    renderRouteRuleEditor(nextSelectedID);
+    renderRouteRuleSelection(nextSelectedID);
   }
 
   function renderRouteRulePaths(routeRules) {
@@ -387,31 +282,7 @@
     if (content) {
       content.value = data.default_route_json || "{\n  \"rules\": []\n}";
     }
-    closeNewRouteRuleDialog();
-  }
-
-  function openNewRouteRuleDialog() {
-    var dialog = document.getElementById("new-route-rule-dialog");
-    if (!dialog) {
-      return;
-    }
-    if (typeof dialog.showModal === "function") {
-      dialog.showModal();
-      return;
-    }
-    dialog.setAttribute("open", "");
-  }
-
-  function closeNewRouteRuleDialog() {
-    var dialog = document.getElementById("new-route-rule-dialog");
-    if (!dialog) {
-      return;
-    }
-    if (typeof dialog.close === "function" && dialog.open) {
-      dialog.close();
-      return;
-    }
-    dialog.removeAttribute("open");
+    closeDialog(form.closest("dialog"));
   }
 
   function bindAjaxForm(form) {
@@ -458,6 +329,8 @@
           var preferredRouteRuleID = "";
           if (form.id === "new-route-rule-form") {
             preferredRouteRuleID = findAddedRouteRuleID(data.route_rules || []);
+          } else if (form.id === "edit-route-rule-form") {
+            preferredRouteRuleID = form.dataset.ruleId;
           }
           updateDashboard(data, preferredRouteRuleID);
           resetNewRouteRuleForm(form, data);
@@ -465,7 +338,7 @@
             templateBaseline = document.getElementById("singbox-template-textarea").value;
             setText("singbox-template-state", "已保存");
             setTemplateError("");
-          } else if (form.id === "nodes-form" || form.id === "subscription-form") {
+          } else if (form.id === "nodes-form" || form.id === "subscription-form" || form.id === "edit-route-rule-form") {
             closeDialog(form.closest("dialog"));
           }
           var report = data.singbox_report || {};
@@ -488,6 +361,7 @@
         .finally(function () {
           form.dataset.saving = "false";
           buttons.forEach(function (button) { button.disabled = false; });
+          if (form.id === "delete-route-rule-form") { updateRouteRuleDeleteControl(selectedRouteRuleID); }
         });
     });
   }
@@ -579,16 +453,11 @@
       select.addEventListener("change", function () {
         selectedRouteRuleID = select.value || "";
         updateRouteRuleDeleteControl(selectedRouteRuleID);
-        renderRouteRuleEditor(selectedRouteRuleID);
+        renderRouteRuleSelection(selectedRouteRuleID);
       });
     }
 
-    var openButton = document.getElementById("open-new-route-rule");
-    if (openButton) {
-      openButton.addEventListener("click", openNewRouteRuleDialog);
-    }
-    document.querySelectorAll("[data-close-route-rule-dialog]").forEach(function (button) {
-      button.addEventListener("click", closeNewRouteRuleDialog);
-    });
+    var editButton = document.getElementById("open-edit-route-rule");
+    if (editButton) { editButton.addEventListener("click", openEditRouteRuleDialog); }
   });
 })();

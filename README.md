@@ -8,7 +8,7 @@ gosub 是一个本地代理订阅管理服务。当前技术栈为 Gin + GORM + 
 - sing-box 订阅：支持 VLESS、Shadowsocks、VMess、Trojan、Hysteria 1/2、TUIC v5、AnyTLS、HTTP(S) 和 SOCKS5 分享链接，本地生成独立的完整 sing-box JSON 配置，原 Xray URL 和 Base64 输出保持不变。
 - sing-box 模板：SQLite 保存完整 JSON 模板，控制 DNS、路由、入站、选择组等配置，生成订阅时只插入转换后的节点；内置 TUN / VPN 和 Mixed 预设作为修改起点。
 - 管理后台：订阅概览、配置管理、路由规则分区展示；节点、路径和模板在独立弹窗中编辑，保存后显示结果提示。
-- 路由规则：下拉选择、默认折叠编辑，展示全部规则的名称和订阅路径，支持新增、修改、删除。
+- 路由规则：与配置管理统一的设置行和弹窗编辑，下拉选择规则，支持新增、修改、删除及复制访问 URL，保留全部规则的名称和路径列表。
 - 路由规则订阅：可维护多条独立 JSON 规则，每条规则都有独立访问 URL。
 - 原生页面：使用 Go `html/template` 和原生 JavaScript，不依赖 templ/htmx。
 - 本地存储：使用 GORM 管理 SQLite 表结构和 CRUD。
@@ -147,7 +147,7 @@ go run .
 | Xray / v2rayN | `/AbCdEf` | 原有 Base64 订阅，字节生成逻辑不变 |
 | sing-box | `/AbCdEf/sing-box` | 原生完整 JSON 配置 |
 
-后台“订阅概览”展示两种链接、复制按钮及 sing-box 转换状态；通过 Nginx 访问时，前端展示和复制使用浏览器实际访问的域名、协议和外部端口。修改或随机重置订阅路径会同时使两种旧 URL 失效。JSON 路由规则不能占用派生的 sing-box 路径。
+后台“订阅概览”展示两种链接、复制按钮及 sing-box 转换状态；通过 Nginx 访问时，前端展示和复制使用浏览器实际访问的域名、协议和外部端口。路由规则的访问 URL 使用同样的生成方式，切换规则或保存新路径后会同步更新；点击“编辑规则”在弹窗中修改名称、路径和 JSON。修改或随机重置订阅路径会同时使两种旧 URL 失效。JSON 路由规则不能占用派生的 sing-box 路径。
 
 当前支持：
 

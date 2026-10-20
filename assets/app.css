@@ -241,66 +241,22 @@ button.copy-button {
 }
 
 .route-rule-manager {
-  display: grid;
-  gap: 14px;
   margin-top: 18px;
 }
 
-.route-rule-controls {
+.route-rule-setting {
   align-items: end;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .route-rule-selector {
   min-width: 0;
 }
 
-.route-rule-delete-control {
+.setting-actions {
   display: flex;
-}
-
-.route-rule-card {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.route-rule-summary {
-  cursor: pointer;
-  display: list-item;
-  padding: 14px 16px;
-}
-
-.route-rule-summary-content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
-  gap: 12px;
-  margin-left: 4px;
-}
-
-.route-rule-summary:hover {
-  background: var(--bg);
-}
-
-.route-rule-summary-title {
-  min-width: 0;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-
-.route-rule-summary-path {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
-.route-rule-card-body {
-  border-top: 1px solid var(--line);
-  padding: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
 }
 
 .route-rule-form {
@@ -468,20 +424,6 @@ button:disabled {
   margin-top: 4px;
 }
 
-.footer-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.button-row {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
 .muted {
   color: var(--muted);
   font-size: 13px;
@@ -498,7 +440,6 @@ button:disabled {
   }
 
   .topbar,
-  .footer-row,
   .panel-heading {
     align-items: stretch;
     flex-direction: column;
@@ -507,23 +448,14 @@ button:disabled {
   .info-grid,
   .inline-form,
   .singbox-settings-form,
-  .route-rule-controls,
+  .route-rule-setting,
   .route-rule-grid {
     grid-template-columns: 1fr;
   }
 
-  .button-row,
   .modal-footer {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .route-rule-summary-content {
-    grid-template-columns: 1fr;
-  }
-
-  .route-rule-summary-path {
-    text-align: left;
   }
 
   button {
@@ -544,4 +476,8 @@ button:disabled {
   .template-dialog .modal-footer { flex-direction: row; flex-wrap: wrap; }
   .template-dialog .modal-footer > .muted { flex-basis: 100%; }
   .template-dialog .modal-footer button { width: auto; flex: 1; }
+  .route-rule-dialog textarea { min-height: 160px; height: 28dvh; }
+  .route-rule-dialog .modal-footer { flex-direction: row; flex-wrap: wrap; }
+  .route-rule-dialog .modal-footer button { width: auto; flex: 1; }
+  .route-rule-dialog .icon-button { width: 38px; flex-shrink: 0; }
 }

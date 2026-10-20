@@ -60,6 +60,7 @@ func TestLoopbackDashboardRouteRulePaths(t *testing.T) {
 		if recorder.Header().Get("Strict-Transport-Security") != "" {
 			t.Fatal("loopback HTTP dashboard unexpectedly enabled HSTS")
 		}
+		assertDashboardRouteRuleLayout(t, recorder.Body.String(), len(want) == 0)
 		if got := dashboardRouteRulePaths(t, recorder.Body.String()); !reflect.DeepEqual(got, want) {
 			t.Fatalf("current service paths = %v, want %v", got, want)
 		}
@@ -105,6 +106,64 @@ func TestLoopbackDashboardRouteRulePaths(t *testing.T) {
 	assertPaths("/rules/updated")
 	post(firstURL+"/delete", nil)
 	assertPaths()
+}
+
+func assertDashboardRouteRuleLayout(t *testing.T, body string, empty bool) {
+	t.Helper()
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attr := func(node *html.Node, key string) string {
+		for _, entry := range node.Attr {
+			if entry.Key == key {
+				return entry.Val
+			}
+		}
+		return ""
+	}
+	nodes := make(map[string]*html.Node)
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if id := attr(node, "id"); id != "" {
+			nodes[id] = node
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	visit(doc)
+	for _, prefix := range []string{"new", "edit"} {
+		form := nodes[prefix+"-route-rule-form"]
+		dialog := nodes[prefix+"-route-rule-dialog"]
+		if form == nil || dialog == nil || dialog.Data != "dialog" || form.Parent != dialog {
+			t.Fatalf("%s route rule form must be inside its dialog", prefix)
+		}
+		for _, entry := range dialog.Attr {
+			if entry.Key == "open" {
+				t.Fatalf("%s route rule dialog must be closed initially", prefix)
+			}
+		}
+	}
+	for _, id := range []string{"route-rule-select", "open-edit-route-rule", "delete-route-rule-button", "copy-route-rule-url"} {
+		node := nodes[id]
+		if node == nil {
+			t.Fatalf("missing route rule control %s", id)
+		}
+		disabled := false
+		for _, entry := range node.Attr {
+			disabled = disabled || entry.Key == "disabled"
+		}
+		if disabled != empty {
+			t.Fatalf("%s disabled = %v, want %v", id, disabled, empty)
+		}
+	}
+	if nodes["route-rule-url"] == nil || nodes["edit-route-rule-url"] == nil || attr(nodes["copy-route-rule-url"], "data-copy-target") != "route-rule-url" {
+		t.Fatal("route rule URL display and copy target are missing")
+	}
+	if nodes["route-rule-editor"] != nil {
+		t.Fatal("inline route rule editor must not be rendered")
+	}
 }
 
 func dashboardRouteRulePaths(t *testing.T, body string) []string {
