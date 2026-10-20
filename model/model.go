@@ -44,6 +44,7 @@ type SingBoxPublication struct {
 	PublishedHash string
 	Body          string `gorm:"type:text"`
 	ReportJSON    string `gorm:"type:text"`
+	NodeHashes    string `gorm:"type:text"`
 	GeneratedAt   time.Time
 	UpdatedAt     time.Time
 }
@@ -51,3 +52,12 @@ type SingBoxPublication struct {
 func (SingBoxPublication) TableName() string {
 	return "singbox_publication"
 }
+
+type SingBoxTemplate struct {
+	ID        uint   `gorm:"primaryKey"`
+	Content   string `gorm:"type:text;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (SingBoxTemplate) TableName() string { return "singbox_template" }

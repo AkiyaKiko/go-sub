@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	urlpath "path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 type TLSConfig struct {
@@ -20,12 +24,13 @@ type TLSConfig struct {
 }
 
 type Settings struct {
-	Host     string          `json:"host"`
-	Port     int             `json:"port"`
-	Admin    string          `json:"admin"`
-	Password string          `json:"password"`
-	TLS      *TLSConfig      `json:"tls,omitempty"`
-	SingBox  *SingBoxOptions `json:"singbox,omitempty"`
+	Host           string          `json:"host"`
+	Port           int             `json:"port"`
+	Admin          string          `json:"admin"`
+	Password       string          `json:"password"`
+	TLS            *TLSConfig      `json:"tls,omitempty"`
+	SingBox        *SingBoxOptions `json:"singbox,omitempty"`
+	TrustedProxies []string        `json:"trusted_proxies"`
 }
 
 type Config struct {
@@ -39,13 +44,14 @@ type bootstrapConfig struct {
 }
 
 type configSettings struct {
-	Host     string          `json:"host"`
-	Port     int             `json:"port"`
-	Path     json.RawMessage `json:"path,omitempty"`
-	Admin    string          `json:"admin"`
-	Password string          `json:"password"`
-	TLS      json.RawMessage `json:"tls,omitempty"`
-	SingBox  *SingBoxOptions `json:"singbox,omitempty"`
+	Host           string          `json:"host"`
+	Port           int             `json:"port"`
+	Path           json.RawMessage `json:"path,omitempty"`
+	Admin          string          `json:"admin"`
+	Password       string          `json:"password"`
+	TLS            json.RawMessage `json:"tls,omitempty"`
+	SingBox        *SingBoxOptions `json:"singbox,omitempty"`
+	TrustedProxies []string        `json:"trusted_proxies,omitempty"`
 }
 
 var (
@@ -127,6 +133,10 @@ func UpdateSingBoxMode(mode string) error {
 	if err != nil {
 		return err
 	}
+	return writePrivateFile(path, encoded)
+}
+
+func writePrivateFile(path string, encoded []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".gosub-config-*")
 	if err != nil {
 		return err
@@ -147,7 +157,19 @@ func UpdateSingBoxMode(mode string) error {
 }
 
 func ParseConfig(r io.Reader) (*Config, error) {
-	dec := json.NewDecoder(r)
+	raw, err := io.ReadAll(io.LimitReader(r, 1024*1024+1))
+	if err != nil || len(raw) > 1024*1024 {
+		return nil, fmt.Errorf("config error: cannot read configuration or size exceeds 1 MiB")
+	}
+	validation := json.NewDecoder(bytes.NewReader(raw))
+	validation.UseNumber()
+	if _, err := readTemplateJSON(validation, 0); err != nil {
+		return nil, fmt.Errorf("config error: invalid JSON, duplicate keys or excessive nesting")
+	}
+	if _, err := validation.Token(); err != io.EOF {
+		return nil, fmt.Errorf("config error: trailing JSON data")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
 	var bootstrap bootstrapConfig
@@ -170,11 +192,12 @@ func (settings *configSettings) toSettings() (*Settings, error) {
 		return nil, nil
 	}
 	normalized := &Settings{
-		Host:     settings.Host,
-		Port:     settings.Port,
-		Admin:    settings.Admin,
-		Password: settings.Password,
-		SingBox:  settings.SingBox,
+		Host:           settings.Host,
+		Port:           settings.Port,
+		Admin:          settings.Admin,
+		Password:       settings.Password,
+		SingBox:        settings.SingBox,
+		TrustedProxies: settings.TrustedProxies,
 	}
 	// The default loopback listener ignores TLS, including certificate validation.
 	if settings.Host != "" && settings.Host != "127.0.0.1" && len(settings.TLS) > 0 {
@@ -202,8 +225,15 @@ func NormalizeSettings(settings *Settings) error {
 	if settings == nil {
 		return fmt.Errorf(`config error: "settings" field is required`)
 	}
-	if settings.Port == 0 {
-		return fmt.Errorf(`config error: "settings.port" is required`)
+	if settings.Port < 1 || settings.Port > 65535 {
+		return fmt.Errorf(`config error: "settings.port" must be between 1 and 65535`)
+	}
+	for _, proxy := range settings.TrustedProxies {
+		if net.ParseIP(proxy) == nil {
+			if _, _, err := net.ParseCIDR(proxy); err != nil {
+				return fmt.Errorf("config error: trusted_proxies requires IP addresses or CIDRs")
+			}
+		}
 	}
 
 	if settings.Host == "" {
@@ -254,7 +284,7 @@ func ValidateSubscriptionPath(path string) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("subscription path must start with /")
 	}
-	if strings.ContainsAny(path, " \t\r\n") {
+	if !utf8.ValidString(path) || strings.ContainsFunc(path, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return fmt.Errorf("subscription path must not contain whitespace")
 	}
 	if strings.ContainsAny(path, "?#") {
@@ -262,6 +292,9 @@ func ValidateSubscriptionPath(path string) error {
 	}
 	if len(path) > 128 {
 		return fmt.Errorf("subscription path is too long")
+	}
+	if strings.ContainsAny(path, "\\%") || strings.Contains(path, "//") || urlpath.Clean(path) != path {
+		return fmt.Errorf("subscription path must be a canonical URL path")
 	}
 	if isReservedPublicPath(path) {
 		return fmt.Errorf("subscription path is reserved")
@@ -282,6 +315,7 @@ func isReservedPublicPath(path string) bool {
 		"/route-rules",
 		"/subscription-path",
 		"/singbox-settings",
+		"/singbox-template",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
@@ -295,6 +329,9 @@ func CloneSettings(settings *Settings) *Settings {
 		return nil
 	}
 	cloned := *settings
+	if settings.TrustedProxies != nil {
+		cloned.TrustedProxies = append([]string{}, settings.TrustedProxies...)
+	}
 	if settings.SingBox != nil {
 		options := *settings.SingBox
 		cloned.SingBox = &options
@@ -324,7 +361,14 @@ func Authenticate(username, password string) bool {
 	if err != nil {
 		return false
 	}
-	return secureCompare(username, settings.Admin) && secureCompare(password, settings.Password)
+	userMatches := secureCompare(username, settings.Admin)
+	passwordMatches := secureCompare(password, settings.Password)
+	return userMatches && passwordMatches
+}
+
+func CredentialsVersion(settings *Settings) [32]byte {
+	encoded, _ := json.Marshal([2]string{settings.Admin, settings.Password})
+	return sha256.Sum256(encoded)
 }
 
 func secureCompare(a, b string) bool {

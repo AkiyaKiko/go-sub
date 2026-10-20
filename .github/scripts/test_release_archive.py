@@ -20,7 +20,7 @@ class ReleaseArchiveTests(unittest.TestCase):
 
     def members(self):
         result = []
-        for name, mode in ((self.binary_name, 0o755), ("config.example.json", 0o644), ("README.md", 0o644)):
+        for name, mode in ((self.binary_name, 0o755), ("config.example.json", 0o644), ("singbox.template.example.json", 0o644), ("README.md", 0o644)):
             member = tarfile.TarInfo(name)
             member.mode = mode
             member.size = 4
@@ -42,8 +42,10 @@ class ReleaseArchiveTests(unittest.TestCase):
         package.mkdir(mode=0o700)
         (package / "config.example.json").write_bytes(b"example")
         (package / "README.md").write_bytes(b"readme")
+        (package / "singbox.template.example.json").write_bytes(b"example template")
         (package / "config.json").write_bytes(b"private configuration")
         (package / "gosub.db").write_bytes(b"private database")
+        (package / "singbox.template.json").write_bytes(b"private template")
         for system in ("linux", "darwin", "windows"):
             for architecture in ("amd64", "arm64"):
                 with self.subTest(system=system, architecture=architecture):
@@ -73,7 +75,7 @@ class ReleaseArchiveTests(unittest.TestCase):
             verify_archive(self.archive_path, self.binary_name)
 
     def test_rejects_unsafe_or_unexpected_paths(self):
-        for name in (".", "../escape", "/absolute", "nested/file", "config.json", "gosub.db"):
+        for name in (".", "../escape", "/absolute", "nested/file", "config.json", "gosub.db", "singbox.template.json"):
             with self.subTest(name=name):
                 members = self.members()
                 members[0].name = name
@@ -99,6 +101,15 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.write_tar(members)
                 with self.assertRaisesRegex(ValueError, "ownership"):
                     verify_archive(self.archive_path, self.binary_name)
+
+    def test_rejects_pax_extended_metadata(self):
+        members = self.members()
+        members[0].pax_headers = {"SCHILY.acl.access": "user::rwx,group::rwx,other::rwx"}
+        with tarfile.open(self.archive_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+            for member in members:
+                archive.addfile(member, io.BytesIO(b"test"))
+        with self.assertRaisesRegex(ValueError, "extra metadata"):
+            verify_archive(self.archive_path, self.binary_name)
 
     def test_rejects_unsafe_permissions(self):
         for index, mode in ((0, 0o4755), (0, 0o777), (0, 0o644), (1, 0o666)):

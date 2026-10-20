@@ -2,6 +2,7 @@ package lib
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"git.local/gosub/model"
 )
@@ -414,8 +416,8 @@ func TestSingBoxTunAndMixedProfiles(t *testing.T) {
 				t.Fatal("VPN DNS configuration missing")
 			}
 			bootstrap, remote := profile.DNS.Servers[0], profile.DNS.Servers[1]
-			if bootstrap.Tag != "dns-bootstrap" || bootstrap.Detour != "direct" || bootstrap.Server != "223.5.5.5" {
-				t.Fatal("node DNS bootstrap can recurse through the proxy")
+			if bootstrap.Tag != "dns-bootstrap" || bootstrap.Detour != "" || bootstrap.Server != "223.5.5.5" {
+				t.Fatal("node DNS bootstrap must use its native direct dialer without detour")
 			}
 			if remote.Tag != "dns-remote" || remote.Type != "https" || remote.Detour != "proxy" || remote.Server != "1.1.1.1" || remote.TLS == nil || !remote.TLS.Enabled || remote.TLS.Insecure {
 				t.Fatal("application DNS is not sent over verified proxy DoH")
@@ -429,15 +431,26 @@ func TestSingBoxModeChangeInvalidatesCacheAndRejectsWrongFallback(t *testing.T) 
 	if err := store.ReplaceNodes([]string{testVLESS("type=tcp")}); err != nil {
 		t.Fatal(err)
 	}
+	mixedTemplate, _ := DefaultSingBoxTemplate(SingBoxOptions{Mode: "mixed"})
+	if err := store.SaveSingBoxTemplate(mixedTemplate); err != nil {
+		t.Fatal(err)
+	}
 	mixed, mixedReport, err := store.SingBoxSubscription(SingBoxOptions{Mode: "mixed"})
 	if err != nil || len(mixed) == 0 || mixedReport.Status != "ready" {
 		t.Fatal("Mixed publication failed")
+	}
+	tunTemplate, _ := DefaultSingBoxTemplate(SingBoxOptions{Mode: "tun"})
+	if err := store.SaveSingBoxTemplate(tunTemplate); err != nil {
+		t.Fatal(err)
 	}
 	tun, tunReport, err := store.SingBoxSubscription(SingBoxOptions{Mode: "tun"})
 	if err != nil || len(tun) == 0 || tunReport.Status != "ready" || bytes.Equal(tun, mixed) || tunReport.SourceHash == mixedReport.SourceHash {
 		t.Fatal("mode change reused old publication")
 	}
 	if err := store.ReplaceNodes([]string{"vmess://unsupported"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSingBoxTemplate(mixedTemplate); err != nil {
 		t.Fatal(err)
 	}
 	if body, report, err := store.SingBoxSubscription(SingBoxOptions{Mode: "mixed"}); err != nil || len(body) != 0 || report.Status != "error" {
@@ -459,14 +472,14 @@ func TestSingBoxPublicationPreservesGoodVersionAndClearsOnEmpty(t *testing.T) {
 		t.Fatalf("first publication: %+v, %v", report, err)
 	}
 	generatedAt := report.GeneratedAt
-	if err := store.ReplaceNodes([]string{"vmess://unsupported"}); err != nil {
+	if err := store.ReplaceNodes(append(valid, "vmess://unsupported")); err != nil {
 		t.Fatal("sing-box conversion blocked Xray save")
 	}
 	body, report, err := store.SingBoxSubscription(SingBoxOptions{})
 	if err != nil || !bytes.Equal(first, body) || report.Status != "stale" || report.GeneratedAt != generatedAt || report.SourceHash == report.PublishedHash {
 		t.Fatalf("last-good publication lost: %+v, %v", report, err)
 	}
-	if nodes, _ := store.Nodes(); !reflect.DeepEqual(nodes, []string{"vmess://unsupported"}) {
+	if nodes, _ := store.Nodes(); !reflect.DeepEqual(nodes, append(valid, "vmess://unsupported")) {
 		t.Fatal("Xray nodes were rolled back")
 	}
 	if err := store.ReplaceNodes(nil); err != nil {
@@ -537,8 +550,14 @@ func TestSingBoxPublicationSurvivesRestartAndInvalidTemplate(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	body, report, err := store.SingBoxSubscription(SingBoxOptions{MixedPort: -1})
-	if err != nil || report.Status != "stale" || !bytes.Equal(body, want) || report.Diagnostics[0].Code != "INVALID_TEMPLATE" {
-		t.Fatalf("invalid template lost persisted publication: %+v, %v", report, err)
+	if err != nil || report.Status != "ready" || !bytes.Equal(body, want) {
+		t.Fatalf("local template was overridden by obsolete preset settings: %+v, %v", report, err)
+	}
+	if err := store.db.Model(&model.SingBoxTemplate{}).Where("id = ?", subscriptionRecordID).Update("content", `{"outbounds":`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if body, report, err := store.SingBoxSubscription(SingBoxOptions{}); err != nil || len(body) != 0 || report.Status != "error" {
+		t.Fatal("invalid edited template served old routing configuration")
 	}
 }
 
@@ -571,6 +590,52 @@ func TestSingBoxUpgradeRetriesPreviouslyUnsupportedProtocols(t *testing.T) {
 	}
 }
 
+func TestSingBoxUpgradeReplacesCachedBootstrapDetour(t *testing.T) {
+	store := newTestStore(t)
+	nodes := []string{testVLESS("type=tcp")}
+	if err := store.ReplaceNodes(nodes); err != nil {
+		t.Fatal(err)
+	}
+	options, err := NormalizeSingBoxOptions(SingBoxOptions{Mode: "tun"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := BuildSingBoxConfig(nodes, options)
+	var oldProfile map[string]any
+	if err := json.Unmarshal(body, &oldProfile); err != nil {
+		t.Fatal(err)
+	}
+	oldProfile["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "direct"
+	oldBody, err := json.Marshal(oldProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSource, err := json.Marshal(struct {
+		Nodes    []string
+		Options  SingBoxOptions
+		Template string
+	}{nodes, options, "tun-mixed-v3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := fmt.Sprintf("%x", sha256.Sum256(oldSource))
+	oldReport, _ := json.Marshal(ConversionReport{Status: "ready", Total: 1, Converted: 1, SourceHash: oldHash, PublishedHash: oldHash})
+	if err := store.db.Save(&model.SingBoxPublication{ID: subscriptionRecordID, SourceHash: oldHash, PublishedHash: oldHash, Body: string(oldBody), ReportJSON: string(oldReport)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	body, report, err := store.SingBoxSubscription(options)
+	if err != nil || report.Status != "ready" || report.SourceHash == oldHash || report.PublishedHash != report.SourceHash {
+		t.Fatalf("cached v3 template was not regenerated: %+v, %v", report, err)
+	}
+	var profile map[string]any
+	if err := json.Unmarshal(body, &profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := profile["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"]; exists {
+		t.Fatal("regenerated subscription retained the invalid bootstrap detour")
+	}
+}
+
 func FuzzParseShareNode(f *testing.F) {
 	for _, raw := range singBoxFixtures() {
 		f.Add(raw)
@@ -587,13 +652,7 @@ func FuzzParseShareNode(f *testing.F) {
 }
 
 func TestSingBoxOfficialCheck(t *testing.T) {
-	binary := os.Getenv("SINGBOX_BINARY")
-	if binary == "" {
-		binary, _ = exec.LookPath("sing-box")
-	}
-	if binary == "" {
-		t.Skip("set SINGBOX_BINARY to the official sing-box 1.14.3 binary")
-	}
+	binary := singBoxTestBinary(t)
 	for _, mode := range []string{"tun", "mixed"} {
 		t.Run(mode, func(t *testing.T) {
 			fixtures := append(singBoxFixtures(), "trojan://password@node.example:443?security=tls")
@@ -610,5 +669,106 @@ func TestSingBoxOfficialCheck(t *testing.T) {
 				t.Fatalf("sing-box check: %v\n%s", err, output)
 			}
 		})
+	}
+}
+
+func singBoxTestBinary(t *testing.T) string {
+	t.Helper()
+	binary := os.Getenv("SINGBOX_BINARY")
+	if binary == "" {
+		binary, _ = exec.LookPath("sing-box")
+	}
+	if binary == "" {
+		t.Skip("set SINGBOX_BINARY to the official sing-box 1.14.3 binary")
+	}
+	return binary
+}
+
+func TestSingBoxOfficialDNSStartup(t *testing.T) {
+	binary := singBoxTestBinary(t)
+	body, report := BuildSingBoxConfig([]string{testVLESS("type=tcp")}, SingBoxOptions{Mode: "tun"})
+	if report.Status != "ready" {
+		t.Fatal(report)
+	}
+	for _, legacyDetour := range []bool{true, false} {
+		t.Run(fmt.Sprintf("legacy-detour=%t", legacyDetour), func(t *testing.T) {
+			var profile map[string]any
+			if err := json.Unmarshal(body, &profile); err != nil {
+				t.Fatal(err)
+			}
+			// Start only the generated DNS topology: no TUN, listeners, URL tests or node connections.
+			delete(profile, "inbounds")
+			delete(profile, "experimental")
+			profile["log"] = map[string]any{"level": "info"}
+			profile["outbounds"] = []singBoxOutbound{
+				{Type: "selector", Tag: "proxy", Outbounds: []string{"direct"}, Default: "direct"},
+				{Type: "direct", Tag: "direct"},
+			}
+			if legacyDetour {
+				profile["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "direct"
+			}
+			fixture, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "dns-startup.json")
+			if err := os.WriteFile(path, fixture, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+				t.Fatalf("DNS fixture check: %v\n%s", err, output)
+			}
+			started, output := runSingBoxStartup(t, binary, path)
+			if legacyDetour {
+				if started || !strings.Contains(output, "detour to an empty direct outbound makes no sense") {
+					t.Fatalf("legacy startup failure was not reproduced:\n%s", output)
+				}
+			} else if !started {
+				t.Fatalf("generated DNS transports failed to start:\n%s", output)
+			}
+		})
+	}
+}
+
+type singBoxStartupOutput struct {
+	buffer bytes.Buffer
+	ready  chan struct{}
+	once   sync.Once
+}
+
+func (output *singBoxStartupOutput) Write(data []byte) (int, error) {
+	n, err := output.buffer.Write(data)
+	if bytes.Contains(output.buffer.Bytes(), []byte("sing-box started")) {
+		output.once.Do(func() { close(output.ready) })
+	}
+	return n, err
+}
+
+func (output *singBoxStartupOutput) String() string { return output.buffer.String() }
+
+func runSingBoxStartup(t *testing.T, binary, path string) (bool, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output := &singBoxStartupOutput{ready: make(chan struct{})}
+	command := exec.CommandContext(ctx, binary, "run", "-c", path)
+	command.Stdout, command.Stderr = output, output
+	command.WaitDelay = time.Second
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case <-output.ready:
+		cancel()
+		<-done
+		return true, output.String()
+	case <-done:
+		return false, output.String()
+	case <-ctx.Done():
+		<-done
+		t.Fatalf("sing-box startup timed out:\n%s", output.String())
+		return false, ""
 	}
 }

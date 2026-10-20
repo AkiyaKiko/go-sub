@@ -3,13 +3,16 @@ package controller
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"git.local/gosub/lib"
@@ -17,21 +20,24 @@ import (
 )
 
 const (
-	statusOK                  = 200
-	statusSeeOther            = 303
-	statusBadRequest          = 400
-	statusUnauthorized        = 401
-	statusForbidden           = 403
-	statusNotFound            = 404
-	statusMethodNotAllowed    = 405
-	statusInternalServerError = 500
-	statusServiceUnavailable  = 503
+	statusOK                   = 200
+	statusSeeOther             = 303
+	statusBadRequest           = 400
+	statusUnauthorized         = 401
+	statusForbidden            = 403
+	statusNotFound             = 404
+	statusMethodNotAllowed     = 405
+	statusRequestTooLarge      = 413
+	statusUnsupportedMediaType = 415
+	statusTooManyRequests      = 429
+	statusInternalServerError  = 500
+	statusServiceUnavailable   = 503
 )
 
 const (
 	sessionCookieName = "session_id"
-	sessionMaxAge     = 2160 * 60 * 60
-	sessionTTL        = 2160 * time.Hour
+	sessionMaxAge     = 12 * 60 * 60
+	sessionTTL        = 12 * time.Hour
 	templatePattern   = "template/*.html"
 )
 
@@ -72,7 +78,7 @@ func (s *Server) sameOriginProtection() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !sameOriginRequest(c) {
+		if !s.sameOriginRequest(c) {
 			c.String(statusForbidden, "Forbidden")
 			c.Abort()
 			return
@@ -85,13 +91,17 @@ func (s *Server) securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		headers := c.Writer.Header()
 		headers.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
-		headers.Set("Referrer-Policy", "same-origin")
+		headers.Set("Referrer-Policy", "no-referrer")
 		headers.Set("X-Content-Type-Options", "nosniff")
 		headers.Set("X-Frame-Options", "DENY")
+		headers.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if c.FullPath() != "" {
+			c.Set("log_route", c.FullPath())
+		}
 		if !strings.HasPrefix(c.Request.URL.Path, "/assets/") {
 			headers.Set("Cache-Control", "no-store")
 		}
-		if settings, err := lib.GetSettings(); err == nil && settings.TLS != nil && settings.TLS.Enabled {
+		if s.requestScheme(c) == "https" {
 			headers.Set("Strict-Transport-Security", "max-age=31536000")
 		}
 		c.Next()
@@ -107,26 +117,190 @@ func isUnsafeMethod(method string) bool {
 	}
 }
 
-func sameOriginRequest(c *gin.Context) bool {
+func (s *Server) sameOriginRequest(c *gin.Context) bool {
+	fetchSite := c.GetHeader("Sec-Fetch-Site")
+	if fetchSite == "cross-site" {
+		return false
+	}
 	origin := c.GetHeader("Origin")
+	// no-referrer form navigations can hide Origin even for same-origin requests.
+	if fetchSite == "same-origin" && (origin == "" || origin == "null") {
+		return true
+	}
 	if origin != "" {
-		return originMatchesHost(origin, c.Request.Host)
+		return originMatchesHost(origin, s.requestScheme(c), c.Request.Host, true)
 	}
 
 	referer := c.GetHeader("Referer")
 	if referer != "" {
-		return originMatchesHost(referer, c.Request.Host)
+		return originMatchesHost(referer, s.requestScheme(c), c.Request.Host, false)
 	}
 
+	return fetchSite == ""
+}
+
+func originMatchesHost(rawURL, scheme, host string, origin bool) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User != nil || parsed.Opaque != "" || parsed.Host == "" || parsed.Scheme != scheme || (scheme != "http" && scheme != "https") {
+		return false
+	}
+	if origin && (parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "") {
+		return false
+	}
+	expected, err := url.Parse(scheme + "://" + host)
+	if err != nil || expected.User != nil || expected.Host != host {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if u.Port() != "" {
+			return u.Port()
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return strings.EqualFold(parsed.Hostname(), expected.Hostname()) && port(parsed) == port(expected)
+}
+
+func (s *Server) requestScheme(c *gin.Context) string {
+	if c.Request.TLS != nil {
+		return "https"
+	}
+	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err == nil {
+		ip := net.ParseIP(host)
+		for _, network := range s.trustedProxies {
+			if network.Contains(ip) && c.GetHeader("X-Forwarded-Proto") == "https" {
+				return "https"
+			}
+		}
+	}
+	return "http"
+}
+
+func (s *Server) requestLimits() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isUnsafeMethod(c.Request.Method) {
+			c.Next()
+			return
+		}
+		if c.FullPath() == "" {
+			c.Next()
+			return
+		}
+		if c.Request.URL.Path != "/login" && c.Request.URL.Path != "/api/login" {
+			if _, ok := sessionFromContext(c); !ok {
+				if strings.HasPrefix(c.FullPath(), "/api/") {
+					c.AbortWithStatus(statusUnauthorized)
+				} else {
+					c.Redirect(statusSeeOther, "/login")
+					c.Abort()
+				}
+				return
+			}
+		}
+		select {
+		case s.writeSlots <- struct{}{}:
+			defer func() { <-s.writeSlots }()
+		default:
+			c.Header("Retry-After", "5")
+			c.AbortWithStatusJSON(statusTooManyRequests, gin.H{"message": "正在处理其他请求，请稍后重试"})
+			return
+		}
+		limit := int64(2 * 1024 * 1024)
+		switch c.Request.URL.Path {
+		case "/login", "/api/login":
+			limit = 8 * 1024
+		case "/nodes", "/api/change_nodes":
+			limit = 16 * 1024 * 1024
+		}
+		if c.Request.ContentLength > limit {
+			c.AbortWithStatusJSON(statusRequestTooLarge, gin.H{"message": "请求内容过大"})
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		if c.Request.ContentLength != 0 {
+			contentType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+			if err != nil || contentType != "application/x-www-form-urlencoded" {
+				c.AbortWithStatusJSON(statusUnsupportedMediaType, gin.H{"message": "仅接受 URL 编码表单"})
+				return
+			}
+		}
+		if err := c.Request.ParseForm(); err != nil {
+			status := statusBadRequest
+			var oversized *http.MaxBytesError
+			if errors.As(err, &oversized) {
+				status = statusRequestTooLarge
+			}
+			c.AbortWithStatusJSON(status, gin.H{"message": "表单无效或超过大小限制"})
+			return
+		}
+		for key, values := range c.Request.PostForm {
+			if len(values) > 1 && !(c.Request.URL.Path == "/api/change_nodes" && key == "nodes") {
+				c.AbortWithStatusJSON(statusBadRequest, gin.H{"message": "表单字段不能重复"})
+				return
+			}
+		}
+		c.Next()
+	}
+}
+
+type loginWindow struct {
+	started time.Time
+	count   int
+}
+type loginLimiter struct {
+	mu      sync.Mutex
+	clients map[string]loginWindow
+	total   loginWindow
+}
+
+func (limiter *loginLimiter) allow(client string, now time.Time) bool {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	const window = 5 * time.Minute
+	if now.Sub(limiter.total.started) >= window {
+		limiter.total = loginWindow{started: now}
+	}
+	if limiter.total.count >= 300 {
+		return false
+	}
+	if limiter.clients == nil {
+		limiter.clients = make(map[string]loginWindow)
+	}
+	entry := limiter.clients[client]
+	if now.Sub(entry.started) >= window {
+		entry = loginWindow{started: now}
+	}
+	if entry.count >= 10 {
+		return false
+	}
+	if len(limiter.clients) >= 4096 {
+		for key, value := range limiter.clients {
+			if now.Sub(value.started) >= window {
+				delete(limiter.clients, key)
+			}
+		}
+		if _, exists := limiter.clients[client]; !exists && len(limiter.clients) >= 4096 {
+			return false
+		}
+	}
+	entry.count++
+	limiter.total.count++
+	limiter.clients[client] = entry
 	return true
 }
 
-func originMatchesHost(rawURL, host string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return false
+func (s *Server) loginProtection() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !s.loginLimiter.allow(c.ClientIP(), time.Now()) {
+			c.Header("Retry-After", "300")
+			c.AbortWithStatusJSON(statusTooManyRequests, gin.H{"message": "登录尝试过多，请稍后再试"})
+			return
+		}
+		c.Next()
 	}
-	return strings.EqualFold(parsed.Host, host)
 }
 
 func (s *Server) requireAPIAuth() gin.HandlerFunc {
@@ -155,14 +329,19 @@ func sessionFromContext(c *gin.Context) (lib.SessionData, bool) {
 	if err != nil || sid == "" {
 		return lib.SessionData{}, false
 	}
-	return lib.GetSession(sid)
+	data, ok := lib.GetSession(sid)
+	if !ok {
+		return lib.SessionData{}, false
+	}
+	settings, err := lib.GetSettings()
+	if err != nil || data.CredentialsVersion != lib.CredentialsVersion(settings) {
+		lib.DeleteSession(sid)
+		return lib.SessionData{}, false
+	}
+	return data, true
 }
 
-func createSessionCookie(c *gin.Context) error {
-	settings, err := lib.GetSettings()
-	if err != nil {
-		return err
-	}
+func (s *Server) createSessionCookie(c *gin.Context) error {
 	sid, err := lib.GenerateSessionID()
 	if err != nil {
 		return err
@@ -173,24 +352,24 @@ func createSessionCookie(c *gin.Context) error {
 	}
 
 	expiration := time.Now().Add(sessionTTL)
-	if err := lib.SetSession(sid, lib.SessionData{UserID: userID, ExpiresAt: expiration}); err != nil {
+	credentials := &lib.Settings{Admin: c.PostForm("username"), Password: c.PostForm("password")}
+	if err := lib.SetSession(sid, lib.SessionData{UserID: userID, ExpiresAt: expiration, CredentialsVersion: lib.CredentialsVersion(credentials)}); err != nil {
 		return err
 	}
+	if previous, err := c.Cookie(sessionCookieName); err == nil {
+		lib.DeleteSession(previous)
+	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookieName, sid, sessionMaxAge, "/", "", settings.TLS != nil && settings.TLS.Enabled, true)
+	c.SetCookie(sessionCookieName, sid, sessionMaxAge, "/", "", s.requestScheme(c) == "https", true)
 	return nil
 }
 
-func clearSessionCookie(c *gin.Context) {
+func (s *Server) clearSessionCookie(c *gin.Context) {
 	if sid, err := c.Cookie(sessionCookieName); err == nil && sid != "" {
 		lib.DeleteSession(sid)
 	}
-	secure := false
-	if settings, err := lib.GetSettings(); err == nil {
-		secure = settings.TLS != nil && settings.TLS.Enabled
-	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookieName, "", -1, "/", "", secure, true)
+	c.SetCookie(sessionCookieName, "", -1, "/", "", s.requestScheme(c) == "https", true)
 }
 
 func flashMessage(code string) string {

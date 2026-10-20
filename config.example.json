@@ -4,6 +4,7 @@
     "port": 12345,
     "admin": "admin",
     "password": "changeMePassword",
+    "trusted_proxies": ["127.0.0.1/32", "::1/128"],
     "singbox": {
       "mode": "tun",
       "allow_partial": false,

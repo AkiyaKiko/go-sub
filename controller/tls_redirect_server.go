@@ -33,16 +33,10 @@ func ListenAndServeTLSWithSamePortRedirect(addr, certFile, keyFile string, tlsHa
 	tlsListener := newConnChanListener(baseListener.Addr())
 	httpListener := newConnChanListener(baseListener.Addr())
 
-	httpsServer := &http.Server{
-		Handler:           tlsHandler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	httpRedirectServer := &http.Server{
-		Handler:           newSamePortHTTPSRedirectHandler(addr),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	httpsServer := newHTTPServer(addr, tlsHandler)
+	httpRedirectServer := newHTTPServer(addr, newSamePortHTTPSRedirectHandler(addr))
 
-	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	errCh := make(chan error, 3)
 
 	go func() {
@@ -69,13 +63,19 @@ func ListenAndServeTLSWithSamePortRedirect(addr, certFile, keyFile string, tlsHa
 }
 
 func dispatchConnections(baseListener net.Listener, tlsListener, httpListener *connChanListener) error {
+	pending := make(chan struct{}, 128)
 	for {
 		conn, err := baseListener.Accept()
 		if err != nil {
 			return err
 		}
 
-		go classifyAndDispatchConn(conn, tlsListener, httpListener)
+		select {
+		case pending <- struct{}{}:
+			go func() { defer func() { <-pending }(); classifyAndDispatchConn(conn, tlsListener, httpListener) }()
+		default:
+			_ = conn.Close()
+		}
 	}
 }
 

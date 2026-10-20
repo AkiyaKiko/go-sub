@@ -89,8 +89,8 @@ func TestSingBoxModeSettingsAuthPersistenceAndPublication(t *testing.T) {
 		request.AddCookie(cookie)
 		page := httptest.NewRecorder()
 		server.router.ServeHTTP(page, request)
-		if page.Code != statusOK || !strings.Contains(page.Body.String(), `id="singbox-mode"`) || !strings.Contains(page.Body.String(), `value="`+mode+`" selected`) {
-			t.Fatal("page did not restore the persisted mode")
+		if page.Code != statusOK || !strings.Contains(page.Body.String(), `id="open-singbox-template"`) || !strings.Contains(page.Body.String(), `id="singbox-template-dialog"`) {
+			t.Fatal("page did not provide the template editor")
 		}
 		export := serveTestRequest(server, "GET", "/private-token/sing-box")
 		var profile struct {
@@ -199,6 +199,82 @@ func TestSingBoxSubscriptionAndOriginalXrayBytes(t *testing.T) {
 	}
 }
 
+func TestSingBoxTemplateAPIAndSave(t *testing.T) {
+	server, store := singBoxTestServer(t)
+	if err := store.ReplaceNodes([]string{controllerVLESS}); err != nil {
+		t.Fatal(err)
+	}
+	if response := serveTestRequest(server, "GET", "/api/singbox-template"); response.Code != statusUnauthorized {
+		t.Fatal("template was exposed without login")
+	}
+	if response := serveTestRequest(server, "POST", "/singbox-template"); response.Code != statusSeeOther {
+		t.Fatal("template save did not require login")
+	}
+	login := httptest.NewRequest("POST", "/login", strings.NewReader("username=test-admin&password=test-password"))
+	login.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loggedIn := httptest.NewRecorder()
+	server.router.ServeHTTP(loggedIn, login)
+	cookie := loggedIn.Result().Cookies()[0]
+	t.Cleanup(func() { lib.DeleteSession(cookie.Value) })
+	get := httptest.NewRequest("GET", "/api/singbox-template", nil)
+	get.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.router.ServeHTTP(response, get)
+	var payload struct {
+		Template string            `json:"template"`
+		Presets  map[string]string `json:"presets"`
+		Storage  string            `json:"storage"`
+		Table    string            `json:"table"`
+	}
+	if response.Code != statusOK || json.Unmarshal(response.Body.Bytes(), &payload) != nil || !strings.Contains(payload.Template, "{{nodes}}") || payload.Presets["tun"] == "" || payload.Presets["mixed"] == "" || payload.Storage != "sqlite" || payload.Table != "singbox_template" {
+		t.Fatal("editor did not receive local template and presets")
+	}
+	custom := `{"log":{"level":"error"},"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":1099}],"outbounds":[{"type":"selector","tag":"custom","outbounds":["{{nodes}}"]}],"route":{"final":"custom"},"experimental":{"clash_api":{"secret":"private-template-secret"}}}`
+	post := func(raw, origin string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest("POST", "/singbox-template", strings.NewReader(url.Values{"template": {raw}}.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Accept", "application/json")
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		request.AddCookie(cookie)
+		result := httptest.NewRecorder()
+		server.router.ServeHTTP(result, request)
+		return result
+	}
+	if result := post(custom, ""); result.Code != statusOK || strings.Contains(result.Body.String(), "private-template-secret") {
+		t.Fatal("template save failed or leaked its secret in dashboard JSON")
+	}
+	raw, err := store.SingBoxTemplate()
+	if err != nil || !strings.Contains(string(raw), "private-template-secret") {
+		t.Fatal("template was not persisted locally")
+	}
+	result := serveTestRequest(server, "GET", "/private-token/sing-box")
+	if result.Code != statusOK || !strings.Contains(result.Body.String(), `"listen_port": 1099`) || !strings.Contains(result.Body.String(), `"type": "vless"`) || strings.Contains(result.Body.String(), "{{nodes}}") {
+		t.Fatal("subscription did not combine custom template and nodes")
+	}
+	if result := post(`{"outbounds":`, ""); result.Code != statusBadRequest {
+		t.Fatal("invalid template was saved")
+	}
+	if result := post(`{"outbounds":[{"type":"selector","tag":"loop","outbounds":["loop"]}]}`, ""); result.Code != statusBadRequest {
+		t.Fatal("cyclic group was saved")
+	}
+	if result := post(custom, "https://attacker.example"); result.Code != statusForbidden {
+		t.Fatal("cross-origin template save succeeded")
+	}
+	current, _ := store.SingBoxTemplate()
+	if !bytes.Equal(raw, current) {
+		t.Fatal("rejected save changed the template")
+	}
+	if err := store.UpdateSubscriptionPath("/singbox-template"); err == nil {
+		t.Fatal("template endpoint was not reserved")
+	}
+	server = NewServer(os.DirFS(".."))
+	if result := serveTestRequest(server, "GET", "/private-token/sing-box"); result.Code != statusOK || !strings.Contains(result.Body.String(), `"listen_port": 1099`) {
+		t.Fatal("saved template was lost after server recreation")
+	}
+}
+
 func TestSingBoxSaveFailureRevocationAndClearing(t *testing.T) {
 	server, store := singBoxTestServer(t)
 	if err := store.ReplaceNodes([]string{controllerVLESS}); err != nil {
@@ -231,7 +307,8 @@ func TestSingBoxSaveFailureRevocationAndClearing(t *testing.T) {
 		}
 		return data
 	}
-	data := post("/nodes", url.Values{"nodes": {"vmess://secret-password-and-uuid"}})
+	newNodes := controllerVLESS + "\nvmess://secret-password-and-uuid"
+	data := post("/nodes", url.Values{"nodes": {newNodes}})
 	if data.SingBoxReport.Status != "stale" || !strings.Contains(data.SingBoxStatusText, "上一次") {
 		t.Fatal("failed export was reported as synchronized")
 	}
@@ -242,7 +319,7 @@ func TestSingBoxSaveFailureRevocationAndClearing(t *testing.T) {
 	if stale := serveTestRequest(server, "GET", "/private-token/sing-box"); stale.Body.String() != good || stale.Header().Get("X-SingBox-Status") != "stale" {
 		t.Fatal("invalid source replaced last-good JSON")
 	}
-	if xray := serveTestRequest(server, "GET", "/private-token"); xray.Body.String() != base64.StdEncoding.EncodeToString([]byte("vmess://secret-password-and-uuid")) {
+	if xray := serveTestRequest(server, "GET", "/private-token"); xray.Body.String() != base64.StdEncoding.EncodeToString([]byte(newNodes)) {
 		t.Fatal("sing-box failure blocked Xray save")
 	}
 	data = post("/subscription-path", url.Values{"path": {"/changed-token"}})
@@ -256,6 +333,10 @@ func TestSingBoxSaveFailureRevocationAndClearing(t *testing.T) {
 	}
 	if response := serveTestRequest(server, "GET", "/changed-token/sing-box"); response.Code != statusOK {
 		t.Fatal("new sing-box URL is unavailable")
+	}
+	data = post("/nodes", url.Values{"nodes": {"vmess://secret-password-and-uuid"}})
+	if data.SingBoxReport.Status != "error" || serveTestRequest(server, "GET", "/changed-token/sing-box").Code != statusServiceUnavailable {
+		t.Fatal("removed node credentials remained publicly available")
 	}
 	data = post("/nodes", url.Values{"nodes": {""}})
 	if data.SingBoxReport.Status != "disabled" {

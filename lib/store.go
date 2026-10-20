@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -31,6 +32,8 @@ var (
 type Store struct {
 	db        *gorm.DB
 	singBoxMu sync.Mutex
+	pathMu    sync.Mutex
+	dbPath    string
 }
 
 func (s *Store) Close() error {
@@ -61,6 +64,19 @@ func InitializeStore(dbPath string) error {
 }
 
 func OpenStore(dbPath string) (*Store, error) {
+	if dbPath != ":memory:" {
+		file, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, fmt.Errorf("prepare private database: %w", err)
+		}
+		if err := file.Chmod(0600); err != nil {
+			file.Close()
+			return nil, err
+		}
+		if err := file.Close(); err != nil {
+			return nil, err
+		}
+	}
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -72,14 +88,24 @@ func OpenStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("get sqlite database handle: %w", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
+	ok := false
+	defer func() {
+		if !ok {
+			_ = sqlDB.Close()
+		}
+	}()
+	if err := db.Exec("PRAGMA secure_delete = ON").Error; err != nil {
+		return nil, fmt.Errorf("enable secure deletion: %w", err)
+	}
 
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Node{}, &model.RouteRule{}, &model.SingBoxPublication{}); err != nil {
+	if err := db.AutoMigrate(&model.Subscription{}, &model.Node{}, &model.RouteRule{}, &model.SingBoxPublication{}, &model.SingBoxTemplate{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite database: %w", err)
 	}
 	if err := restrictFileMode(dbPath); err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	ok = true
+	return &Store{db: db, dbPath: dbPath}, nil
 }
 
 func SetDefaultStore(store *Store) {
@@ -113,6 +139,16 @@ func (s *Store) ReplaceNodes(nodes []string) error {
 	s.singBoxMu.Lock()
 	defer s.singBoxMu.Unlock()
 	nodes = NormalizeNodes(nodes)
+	total := 0
+	if len(nodes) > maxSingBoxNodes {
+		return fmt.Errorf("node input exceeds 2048 entries")
+	}
+	for _, node := range nodes {
+		total += len(node)
+		if len(node) > maxShareURIBytes || total > maxSingBoxInputBytes {
+			return fmt.Errorf("node input exceeds size limit")
+		}
+	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("1 = 1").Delete(&model.Node{}).Error; err != nil {
 			return fmt.Errorf("delete old nodes: %w", err)
@@ -150,14 +186,16 @@ func (s *Store) syncSingBoxLocked(options SingBoxOptions) ([]byte, ConversionRep
 	if err != nil {
 		return nil, ConversionReport{}, err
 	}
-	if normalized, optionErr := NormalizeSingBoxOptions(options); optionErr == nil {
-		options = normalized
+	template, err := s.loadSingBoxTemplateLocked(options)
+	if err != nil {
+		return nil, ConversionReport{}, err
 	}
 	source, err := json.Marshal(struct {
 		Nodes    []string
-		Options  SingBoxOptions
+		Partial  bool
+		Content  string
 		Template string
-	}{nodes, options, SingBoxTemplateVersion})
+	}{nodes, options.AllowPartial, singBoxTemplateHash(template), SingBoxTemplateVersion})
 	if err != nil {
 		return nil, ConversionReport{}, err
 	}
@@ -167,34 +205,32 @@ func (s *Store) syncSingBoxLocked(options SingBoxOptions) ([]byte, ConversionRep
 		return nil, ConversionReport{}, fmt.Errorf("load sing-box publication: %w", err)
 	}
 	var report ConversionReport
-	if publication.SourceHash == sourceHash && json.Unmarshal([]byte(publication.ReportJSON), &report) == nil {
+	reportLoaded := json.Unmarshal([]byte(publication.ReportJSON), &report) == nil
+	if publication.SourceHash == sourceHash && reportLoaded {
 		return []byte(publication.Body), report, nil
 	}
-	body, report := BuildSingBoxConfig(nodes, options)
+	previousTemplateHash := report.TemplateHash
+	body, report := BuildSingBoxConfigWithTemplate(nodes, options, template)
 	report.SourceHash = sourceHash
 	if len(body) > 0 {
 		publication.Body = string(body)
+		hashes, _ := json.Marshal(nodeFingerprints(nodes))
+		publication.NodeHashes = string(hashes)
 		publication.PublishedHash = sourceHash
 		publication.GeneratedAt = time.Now().UTC()
 	} else if report.Status == "disabled" {
 		publication.Body, publication.PublishedHash = "", ""
+		publication.NodeHashes = ""
 		publication.GeneratedAt = time.Time{}
 	} else if publication.Body != "" {
-		var previous struct {
-			Inbounds []struct {
-				Type string `json:"type"`
-			} `json:"inbounds"`
-		}
-		mode := options.Mode
-		if mode == "" {
-			mode = "tun"
-		}
-		if json.Unmarshal([]byte(publication.Body), &previous) == nil && len(previous.Inbounds) == 1 && previous.Inbounds[0].Type == mode {
+		if previousTemplateHash == singBoxTemplateHash(template) && publicationNodesStillPresent(publication.NodeHashes, nodes) {
 			report.Status = "stale"
 		} else {
-			// An old Mixed profile cannot satisfy a request for a VPN profile (or vice versa).
+			// A failed conversion cannot undo a credential or template revocation.
 			publication.Body, publication.PublishedHash = "", ""
+			publication.NodeHashes = ""
 			publication.GeneratedAt = time.Time{}
+			report.Diagnostics = append(report.Diagnostics, ConversionDiagnostic{Code: "PREVIOUS_CONFIG_REVOKED", Status: "invalid", Message: "模板或节点已变更，旧配置已撤销；请修复转换错误后重试"})
 		}
 	}
 	publication.SourceHash = sourceHash
@@ -211,6 +247,33 @@ func (s *Store) syncSingBoxLocked(options SingBoxOptions) ([]byte, ConversionRep
 		return nil, report, fmt.Errorf("save sing-box publication: %w", err)
 	}
 	return []byte(publication.Body), report, nil
+}
+
+func nodeFingerprints(nodes []string) []string {
+	fingerprints := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if normalized := normalizeShareLine(node); normalized != "" {
+			fingerprints = append(fingerprints, fmt.Sprintf("%x", sha256.Sum256([]byte(normalized))))
+		}
+	}
+	return fingerprints
+}
+
+func publicationNodesStillPresent(raw string, nodes []string) bool {
+	var published []string
+	if json.Unmarshal([]byte(raw), &published) != nil || len(published) == 0 {
+		return false
+	}
+	current := make(map[string]bool)
+	for _, hash := range nodeFingerprints(nodes) {
+		current[hash] = true
+	}
+	for _, hash := range published {
+		if !current[hash] {
+			return false
+		}
+	}
+	return true
 }
 
 func GetSingBoxSubscription() ([]byte, ConversionReport, error) {
@@ -273,6 +336,8 @@ func (s *Store) SubscriptionPath() (string, error) {
 }
 
 func (s *Store) UpdateSubscriptionPath(path string) error {
+	s.pathMu.Lock()
+	defer s.pathMu.Unlock()
 	path = strings.TrimSpace(path)
 	if err := ValidateSubscriptionPath(path); err != nil {
 		return err
@@ -303,6 +368,8 @@ func (s *Store) RouteRules() ([]RouteRuleSnapshot, error) {
 }
 
 func (s *Store) CreateRouteRule(name, path, content string) error {
+	s.pathMu.Lock()
+	defer s.pathMu.Unlock()
 	name = NormalizeRouteRuleName(name)
 	path = strings.TrimSpace(path)
 	if err := ValidateSubscriptionPath(path); err != nil {
@@ -323,6 +390,8 @@ func (s *Store) CreateRouteRule(name, path, content string) error {
 }
 
 func (s *Store) UpdateRouteRule(id uint, name, path, content string) error {
+	s.pathMu.Lock()
+	defer s.pathMu.Unlock()
 	name = NormalizeRouteRuleName(name)
 	path = strings.TrimSpace(path)
 	if err := ValidateSubscriptionPath(path); err != nil {
@@ -353,6 +422,8 @@ func (s *Store) UpdateRouteRule(id uint, name, path, content string) error {
 }
 
 func (s *Store) DeleteRouteRule(id uint) error {
+	s.pathMu.Lock()
+	defer s.pathMu.Unlock()
 	result := s.db.Delete(&model.RouteRule{}, id)
 	if result.Error != nil {
 		return fmt.Errorf("delete route rule: %w", result.Error)
@@ -564,13 +635,21 @@ func NormalizeJSONText(raw string) (string, error) {
 	if len([]byte(raw)) > maxRouteRuleJSONBytes {
 		return "", fmt.Errorf("route rule json is too large")
 	}
-	if !json.Valid([]byte(raw)) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if _, err := readTemplateJSON(decoder, 0); err != nil {
+		return "", fmt.Errorf("route rule json is invalid")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
 		return "", fmt.Errorf("route rule json is invalid")
 	}
 
 	var out bytes.Buffer
 	if err := json.Indent(&out, []byte(raw), "", "  "); err != nil {
 		return "", fmt.Errorf("format route rule json: %w", err)
+	}
+	if out.Len() > maxRouteRuleJSONBytes {
+		return "", fmt.Errorf("route rule json is too large")
 	}
 	return out.String(), nil
 }

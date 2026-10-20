@@ -2,6 +2,8 @@
   var routeRulesState = [];
   var selectedRouteRuleID = "";
   var toastSequence = 0;
+  var singBoxPresets = {};
+  var templateBaseline = "";
 
   function showMessage(text, isError) {
     var status = document.getElementById("status");
@@ -26,6 +28,9 @@
     if (!region || !text) {
       return;
     }
+
+    var parent = document.querySelector("dialog[open]") || document.body;
+    if (region.parentElement !== parent) { parent.appendChild(region); }
 
     toastSequence += 1;
     var toast = document.createElement("div");
@@ -76,7 +81,6 @@
     setText("singbox-url", subscriptionDisplayURL(data.singbox_path, data.singbox_url));
     setText("singbox-path", data.singbox_path || "");
     renderSingBoxReport(data.singbox_report || {}, data.singbox_status_text || "");
-    setValue("singbox-mode", data.singbox_mode || "tun");
     setText("nodes-count", String(data.node_count || 0));
     setText("route-rules-count", String((data.route_rules || []).length));
     setValue("path-input", data.subscription_path || "");
@@ -417,6 +421,7 @@
     form.dataset.bound = "true";
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (form.dataset.saving === "true") { return; }
       if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
         return;
       }
@@ -428,6 +433,9 @@
       }
 
       var action = form.getAttribute("action") || window.location.href;
+      form.dataset.saving = "true";
+      var buttons = Array.from(form.querySelectorAll("button[type='submit']"));
+      buttons.forEach(function (button) { button.disabled = true; });
 
       fetch(action, {
         method: form.method || "POST",
@@ -453,9 +461,16 @@
           }
           updateDashboard(data, preferredRouteRuleID);
           resetNewRouteRuleForm(form, data);
+          if (form.id === "singbox-template-form") {
+            templateBaseline = document.getElementById("singbox-template-textarea").value;
+            setText("singbox-template-state", "已保存");
+            setTemplateError("");
+          } else if (form.id === "nodes-form" || form.id === "subscription-form") {
+            closeDialog(form.closest("dialog"));
+          }
           var report = data.singbox_report || {};
-          var updatesSingBox = form.id === "nodes-form" || form.id === "singbox-settings-form";
-          var savedMessage = form.id === "singbox-settings-form" ? "设置已保存" : "节点已保存";
+          var updatesSingBox = form.id === "nodes-form" || form.id === "singbox-template-form";
+          var savedMessage = form.id === "singbox-template-form" ? "模板已保存" : "节点已保存";
           if (updatesSingBox && (report.status === "stale" || report.status === "error")) {
             showToast(savedMessage + "；sing-box 未同步，请查看转换明细", true);
           } else if (updatesSingBox && report.status === "warning" && report.failed) {
@@ -466,10 +481,58 @@
         })
         .catch(function (error) {
           var message = error && error.message ? error.message : "保存失败";
+          if (form.id === "singbox-template-form") { setTemplateError(message); }
           showMessage("");
           showToast(message, true);
+        })
+        .finally(function () {
+          form.dataset.saving = "false";
+          buttons.forEach(function (button) { button.disabled = false; });
         });
     });
+  }
+
+  function openDialog(dialog) {
+    if (!dialog) { return; }
+    if (typeof dialog.showModal === "function") { dialog.showModal(); }
+    else { dialog.setAttribute("open", ""); }
+  }
+
+  function closeDialog(dialog) {
+    if (!dialog) { return; }
+    var region = document.getElementById("toast-region");
+    if (region && dialog.contains(region)) { document.body.appendChild(region); }
+    if (typeof dialog.close === "function" && dialog.open) { dialog.close(); }
+    else { dialog.removeAttribute("open"); }
+  }
+
+  function setTemplateError(message) {
+    var node = document.getElementById("singbox-template-error");
+    if (node) { node.textContent = message; node.hidden = !message; }
+  }
+
+  function openTemplateDialog() {
+    openDialog(document.getElementById("singbox-template-dialog"));
+    setText("singbox-template-state", "载入中");
+    setTemplateError("");
+    document.getElementById("singbox-template-textarea").disabled = true;
+    document.getElementById("save-singbox-template").disabled = true;
+    document.getElementById("load-singbox-preset").disabled = true;
+    fetch("/api/singbox-template", {credentials:"same-origin", headers:{Accept:"application/json"}})
+      .then(function (response) {
+        return response.json().then(function (data) { if (!response.ok) { throw data; } return data; });
+      })
+      .then(function (data) {
+        singBoxPresets = data.presets || {};
+        templateBaseline = data.template || "";
+        setValue("singbox-template-textarea", templateBaseline);
+        setText("singbox-template-state", data.read_error ? "载入失败" : "已载入保存的模板");
+        setTemplateError(data.read_error || "");
+        document.getElementById("save-singbox-template").disabled = false;
+        document.getElementById("load-singbox-preset").disabled = false;
+      })
+      .catch(function (error) { setTemplateError(error.message || "模板读取失败"); setText("singbox-template-state", "载入失败"); })
+      .finally(function () { document.getElementById("singbox-template-textarea").disabled = false; });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -482,6 +545,34 @@
       button.addEventListener("click", function () { copySubscriptionURL(button); });
     });
     document.querySelectorAll("form[data-ajax-form]").forEach(bindAjaxForm);
+    document.querySelectorAll("[data-open-dialog]").forEach(function (button) {
+      button.addEventListener("click", function () { openDialog(document.getElementById(button.dataset.openDialog)); });
+    });
+    document.querySelectorAll("[data-close-dialog]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var dialog = button.closest("dialog");
+        if (dialog.id === "singbox-template-dialog" && document.getElementById("singbox-template-textarea").value !== templateBaseline && !window.confirm("放弃未保存的模板修改？")) { return; }
+        closeDialog(dialog);
+      });
+    });
+    var templateButton = document.getElementById("open-singbox-template");
+    if (templateButton) { templateButton.addEventListener("click", openTemplateDialog); }
+    var presetButton = document.getElementById("load-singbox-preset");
+    if (presetButton) { presetButton.addEventListener("click", function () {
+      var preset = singBoxPresets[document.getElementById("singbox-preset").value];
+      if (!preset) { return; }
+      var field = document.getElementById("singbox-template-textarea");
+      if (field.value !== templateBaseline && !window.confirm("用预设替换未保存的修改？")) { return; }
+      field.value = preset;
+      setText("singbox-template-state", "预设已载入，未保存");
+      setTemplateError("");
+    }); }
+    var templateField = document.getElementById("singbox-template-textarea");
+    if (templateField) { templateField.addEventListener("input", function () { setText("singbox-template-state", templateField.value === templateBaseline ? "已保存" : "未保存"); }); }
+    var templateDialog = document.getElementById("singbox-template-dialog");
+    if (templateDialog) { templateDialog.addEventListener("cancel", function (event) {
+      if (templateField.value !== templateBaseline && !window.confirm("放弃未保存的模板修改？")) { event.preventDefault(); }
+    }); }
     var select = document.getElementById("route-rule-select");
     if (select) {
       renderRouteRules(loadInitialRouteRules(), select.value || "");

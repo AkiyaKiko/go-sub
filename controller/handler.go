@@ -4,7 +4,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"git.local/gosub/lib"
 	"github.com/gin-gonic/gin"
@@ -30,7 +29,7 @@ func (s *Server) login(c *gin.Context) {
 		c.Redirect(statusSeeOther, "/login?msg=login_failed")
 		return
 	}
-	if err := createSessionCookie(c); err != nil {
+	if err := s.createSessionCookie(c); err != nil {
 		c.String(statusInternalServerError, "failed to create session")
 		return
 	}
@@ -38,7 +37,7 @@ func (s *Server) login(c *gin.Context) {
 }
 
 func (s *Server) logout(c *gin.Context) {
-	clearSessionCookie(c)
+	s.clearSessionCookie(c)
 	c.Redirect(statusSeeOther, "/login?msg=logged_out")
 }
 
@@ -47,7 +46,7 @@ func (s *Server) apiLogin(c *gin.Context) {
 		c.String(statusUnauthorized, "Unauthorized")
 		return
 	}
-	if err := createSessionCookie(c); err != nil {
+	if err := s.createSessionCookie(c); err != nil {
 		c.String(statusInternalServerError, "Internal Server Error")
 		return
 	}
@@ -63,7 +62,7 @@ func (s *Server) apiSession(c *gin.Context) {
 }
 
 func (s *Server) apiLogout(c *gin.Context) {
-	clearSessionCookie(c)
+	s.clearSessionCookie(c)
 	c.Status(statusOK)
 }
 
@@ -89,6 +88,7 @@ func (s *Server) apiConfig(c *gin.Context) {
 		return
 	}
 
+	cfg.Settings.Password = ""
 	c.JSON(statusOK, gin.H{
 		"settings":          cfg.Settings,
 		"nodes":             cfg.Nodes,
@@ -111,7 +111,7 @@ func (s *Server) apiChangeURI(c *gin.Context) {
 
 func (s *Server) apiChangeNodes(c *gin.Context) {
 	if err := lib.UpdateNodes(c.PostFormArray("nodes")); err != nil {
-		c.String(statusInternalServerError, err.Error())
+		c.String(statusBadRequest, "节点保存失败：输入无效或存储不可用")
 		return
 	}
 	c.Status(statusOK)
@@ -164,7 +164,59 @@ func (s *Server) saveSingBoxSettings(c *gin.Context) {
 		s.respondDashboard(c, statusInternalServerError, "sing-box 设置保存失败，请检查配置文件及目录写入权限")
 		return
 	}
+	settings, err := lib.GetSettings()
+	if err != nil {
+		s.respondDashboard(c, statusInternalServerError, "设置读取失败")
+		return
+	}
+	preset, err := lib.DefaultSingBoxTemplate(*settings.SingBox)
+	store, storeErr := lib.DefaultStore()
+	if err != nil || storeErr != nil {
+		s.respondDashboard(c, statusInternalServerError, "预设生成失败")
+		return
+	}
+	if err := store.SaveSingBoxTemplate(preset); err != nil {
+		s.respondDashboard(c, statusInternalServerError, "预设保存失败")
+		return
+	}
 	s.respondDashboard(c, statusOK, "sing-box 设置已保存")
+}
+
+func (s *Server) apiSingBoxTemplate(c *gin.Context) {
+	store, err := lib.DefaultStore()
+	if err != nil {
+		c.JSON(statusInternalServerError, gin.H{"message": "模板读取失败"})
+		return
+	}
+	raw, err := store.SingBoxTemplate()
+	message := ""
+	if err != nil {
+		message = "模板读取失败，可载入预设修复，或检查数据库状态"
+	}
+	tun, _ := lib.DefaultSingBoxTemplate(lib.SingBoxOptions{Mode: "tun"})
+	mixed, _ := lib.DefaultSingBoxTemplate(lib.SingBoxOptions{Mode: "mixed"})
+	c.JSON(statusOK, gin.H{"template": string(raw), "storage": "sqlite", "table": "singbox_template", "read_error": message, "presets": gin.H{"tun": string(tun), "mixed": string(mixed)}})
+}
+
+func (s *Server) saveSingBoxTemplate(c *gin.Context) {
+	if !s.requireWebAuth(c) {
+		return
+	}
+	store, err := lib.DefaultStore()
+	if err != nil {
+		s.respondDashboard(c, statusInternalServerError, "模板存储暂时不可用")
+		return
+	}
+	if err := store.SaveSingBoxTemplate([]byte(c.PostForm("template"))); err != nil {
+		message := "模板保存失败，请检查数据库状态及写入权限"
+		status := statusInternalServerError
+		if lib.IsSingBoxTemplateError(err) {
+			message, status = err.Error(), statusBadRequest
+		}
+		s.respondDashboard(c, status, message)
+		return
+	}
+	s.respondDashboard(c, statusOK, "sing-box 模板已保存")
 }
 
 func (s *Server) createRouteRule(c *gin.Context) {
@@ -270,7 +322,6 @@ func (s *Server) subscription(c *gin.Context) {
 		return
 	}
 
-	logRequest(c)
 	if settings.TLS != nil && settings.TLS.Enabled {
 		c.Header("Strict-Transport-Security", "max-age=31536000")
 	}
@@ -307,18 +358,6 @@ func (s *Server) singBoxSubscription(c *gin.Context) {
 		return
 	}
 	c.Data(statusOK, "application/json; charset=utf-8", body)
-}
-
-func logRequest(c *gin.Context) {
-	log.Printf(
-		`time=%s src=%s method=%s path=%q ua=%q referer=%q lang=%q`,
-		time.Now().Format("2006-01-02 15:04:05"), c.ClientIP(),
-		c.Request.Method,
-		c.Request.URL.RequestURI(),
-		c.GetHeader("User-Agent"),
-		c.GetHeader("Referer"),
-		c.GetHeader("Accept-Language"),
-	)
 }
 
 func (s *Server) renderDashboard(c *gin.Context, status int, message string) {

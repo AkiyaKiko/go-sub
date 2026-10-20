@@ -11,6 +11,29 @@ import (
 	"testing"
 )
 
+func TestConfigSecurityValidationAndProxyRoundTrip(t *testing.T) {
+	for _, raw := range []string{
+		`{"settings":{"host":"127.0.0.1","port":8080,"admin":"one","admin":"two","password":"secret"}}`,
+		`{"settings":{"host":"127.0.0.1","port":8080,"admin":"one","password":"secret"}} {}`,
+		`{"settings":{"host":"127.0.0.1","port":65536,"admin":"one","password":"secret"}}`,
+		`{"settings":{"host":"127.0.0.1","port":8080,"admin":"one","password":"secret","trusted_proxies":["not-an-ip"]}}`,
+		strings.Repeat(" ", 1024*1024+1),
+	} {
+		if _, err := ParseConfig(strings.NewReader(raw)); err == nil {
+			t.Fatal("invalid security configuration accepted")
+		}
+	}
+	config := &Config{Settings: &Settings{Host: "127.0.0.1", Port: 8080, Admin: "admin", Password: "password", TrustedProxies: []string{}}}
+	raw, err := EncodeConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ParseConfig(bytes.NewReader(raw))
+	if err != nil || decoded.Settings.TrustedProxies == nil || len(decoded.Settings.TrustedProxies) != 0 {
+		t.Fatal("explicitly disabled proxy trust was lost")
+	}
+}
+
 func TestUpdateSingBoxModePreservesConfigAndPersists(t *testing.T) {
 	configFileMu.RLock()
 	previousPath := configFilePath

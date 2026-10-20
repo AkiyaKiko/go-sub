@@ -54,8 +54,7 @@ body {
   padding: 24px;
 }
 
-.login-panel,
-.panel {
+.login-panel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -67,9 +66,31 @@ body {
 }
 
 .panel {
-  padding: 20px;
-  margin-top: 16px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--line);
 }
+
+.brand { display: flex; align-items: baseline; gap: 16px; min-width: 0; }
+.wordmark { font-size: 22px; font-weight: 700; color: var(--accent); }
+.brand .title { font-size: 19px; }
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.subscription-row { display: grid; grid-template-columns: 148px minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.subscription-client { display: grid; gap: 2px; font-size: 14px; }
+.subscription-address { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
+.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
+.setting-row > div { min-width: 0; }
+.setting-row h3 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+.setting-row code { overflow-wrap: anywhere; }
+.report-heading { display: flex; gap: 8px; align-items: center; }
+.state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 6px; }
+.service-footer { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); padding: 20px 0; }
+.rule-path-details { margin-top: 16px; font-size: 13px; }
+.rule-path-details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
+.modal.editor-dialog { width: min(960px, calc(100% - 32px)); }
+.template-toolbar { display: grid; grid-template-columns: minmax(150px, 1fr) auto auto; gap: 10px; align-items: end; margin: 12px 0 16px; }
+.template-dialog textarea { height: min(52vh, 480px); min-height: 200px; tab-size: 2; }
+.template-dialog .modal-footer > .muted { margin-right: auto; align-self: center; }
+.text-link { color: var(--accent); font-size: 13px; align-self: center; padding: 8px 0; }
 
 .topbar {
   display: flex;
@@ -155,8 +176,7 @@ button.copy-button {
 }
 
 .conversion-report {
-  border-top: 1px solid var(--line);
-  margin-top: 16px;
+  margin-top: 0;
   padding-top: 14px;
 }
 
@@ -509,4 +529,19 @@ button:disabled {
   button {
     width: 100%;
   }
+
+  .topbar { flex-direction: row; align-items: center; }
+  .topbar button, .setting-row button { width: auto; }
+  .brand { gap: 10px; }
+  .brand .title { font-size: 17px; }
+  .subscription-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .subscription-address { grid-row: 2; grid-column: 1 / -1; }
+  .subscription-client { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .subscription-row button { grid-column: 2; grid-row: 1; }
+  .template-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .template-toolbar > label { grid-column: 1 / -1; }
+  .template-dialog textarea { height: max(160px, calc(100dvh - 460px)); min-height: 160px; max-height: 480px; }
+  .template-dialog .modal-footer { flex-direction: row; flex-wrap: wrap; }
+  .template-dialog .modal-footer > .muted { flex-basis: 100%; }
+  .template-dialog .modal-footer button { width: auto; flex: 1; }
 }

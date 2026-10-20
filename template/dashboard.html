@@ -3,186 +3,106 @@
   <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>gosub 管理</title>
-    <link rel="stylesheet" href="/assets/app.css?v=20261020"/>
-    <script src="/assets/app.js?v=20261020" defer></script>
+    <title>gosub 订阅管理</title>
+    <link rel="stylesheet" href="/assets/app.css?v=20261020-sqlite"/>
+    <script src="/assets/app.js?v=20261020-sqlite" defer></script>
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <h1 class="title">代理订阅管理</h1>
-          <p class="subtitle">gosub</p>
-        </div>
-        <form method="post" action="/logout">
-          <button class="ghost" type="submit">退出登录</button>
-        </form>
+        <div class="brand"><span class="wordmark">gosub</span><h1 class="title">订阅管理</h1></div>
+        <form method="post" action="/logout"><button class="ghost" type="submit">退出登录</button></form>
       </header>
-
-      <div id="status" aria-live="polite">
-        {{if .Message}}
-          <p class="message">{{.Message}}</p>
-        {{end}}
-      </div>
+      <div id="status" aria-live="polite">{{if .Message}}<p class="message">{{.Message}}</p>{{end}}</div>
       <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-      <section class="panel">
-        <h2 class="panel-title">当前服务</h2>
-        <div class="info-grid">
-          <div class="info-item">
-            <span class="label">监听地址</span>
-            <div class="value">{{.ListenAddress}}</div>
-          </div>
-          <div class="info-item">
-            <span class="label">TLS</span>
-            <div class="value">{{.TLSStatus}}</div>
-          </div>
-          <div class="info-item">
-            <span class="label">Xray / V2Ray 订阅链接</span>
-            <div class="subscription-link">
-              <div class="value" id="subscription-url">{{.SubscriptionURL}}</div>
-              <button class="ghost copy-button" type="button" data-copy-target="subscription-url" aria-label="复制 Xray 订阅链接" title="复制 Xray 订阅链接">复制</button>
-            </div>
-          </div>
-          <div class="info-item">
-            <span class="label">sing-box 订阅链接</span>
-            <div class="subscription-link">
-              <div class="value" id="singbox-url">{{.SingBoxURL}}</div>
-              <button class="ghost copy-button" type="button" data-copy-target="singbox-url" aria-label="复制 sing-box 订阅链接" title="复制 sing-box 订阅链接">复制</button>
-            </div>
-          </div>
-          <div class="info-item">
-            <span class="label">sing-box 订阅路径</span>
-            <div class="value" id="singbox-path">{{.SingBoxPath}}</div>
-          </div>
-          <div class="info-item">
-            <span class="label">订阅路径</span>
-            <div class="value" id="subscription-path">{{.SubscriptionPath}}</div>
-          </div>
-          <div class="info-item">
-            <span class="label">路由规则订阅路径</span>
-            <ul class="value route-rule-paths" id="route-rule-paths">
-              {{range .RouteRules}}
-                <li><span class="muted">{{.Name}}</span><code>{{.Path}}</code></li>
-              {{else}}
-                <li class="muted">暂无路由规则</li>
-              {{end}}
-            </ul>
-          </div>
-          <div class="info-item">
-            <span class="label">管理员</span>
-            <div class="value">{{.Settings.Admin}}</div>
-          </div>
+      <section class="panel overview">
+        <div class="section-heading"><h2 class="panel-title">订阅概览</h2><span class="muted">{{.ListenAddress}} · TLS {{.TLSStatus}}</span></div>
+        <div class="subscription-row">
+          <div class="subscription-client"><strong>Xray / V2Ray</strong><span class="muted">Base64</span></div>
+          <div class="value subscription-address" id="subscription-url">{{.SubscriptionURL}}</div>
+          <button class="ghost copy-button" type="button" data-copy-target="subscription-url" aria-label="复制 Xray 订阅链接" title="复制 Xray 订阅链接">复制链接</button>
         </div>
+        <div class="subscription-row">
+          <div class="subscription-client"><strong>sing-box</strong><span class="muted">JSON</span></div>
+          <div class="value subscription-address" id="singbox-url">{{.SingBoxURL}}</div>
+          <button class="ghost copy-button" type="button" data-copy-target="singbox-url" aria-label="复制 sing-box 订阅链接" title="复制 sing-box 订阅链接">复制链接</button>
+        </div>
+        <div id="singbox-path" hidden>{{.SingBoxPath}}</div>
         <div class="conversion-report">
-          <span class="label">sing-box 转换状态</span>
-          <p class="value{{if or (eq .SingBoxReport.Status "error") (eq .SingBoxReport.Status "stale")}} conversion-error{{end}}" id="singbox-status">{{.SingBoxStatusText}}</p>
+          <div class="report-heading"><span class="state-dot" aria-hidden="true"></span><strong class="value{{if or (eq .SingBoxReport.Status "error") (eq .SingBoxReport.Status "stale")}} conversion-error{{end}}" id="singbox-status">{{.SingBoxStatusText}}</strong></div>
           <p class="muted" id="singbox-counts">共 {{.SingBoxReport.Total}} 个节点，可转换 {{.SingBoxReport.Converted}} 个，失败 {{.SingBoxReport.Failed}} 个，警告 {{.SingBoxReport.Warnings}} 条</p>
           <p class="muted" id="singbox-generated-at">{{if .SingBoxReport.GeneratedAt}}生成时间：{{.SingBoxReport.GeneratedAt}}{{end}}</p>
-          <details id="singbox-diagnostics-details" {{if not .SingBoxReport.Diagnostics}}hidden{{end}}>
-            <summary>转换明细</summary>
-            <ul id="singbox-diagnostics">
-              {{range .SingBoxReport.Diagnostics}}
-                <li>{{if .SourceIndex}}节点 {{.SourceIndex}}：{{end}}{{.Message}}（{{.Code}}）</li>
-              {{end}}
-            </ul>
-          </details>
+          <details id="singbox-diagnostics-details" {{if not .SingBoxReport.Diagnostics}}hidden{{end}}><summary>转换明细</summary><ul id="singbox-diagnostics">{{range .SingBoxReport.Diagnostics}}<li>{{if .SourceIndex}}节点 {{.SourceIndex}}：{{end}}{{.Message}}（{{.Code}}）</li>{{end}}</ul></details>
         </div>
       </section>
 
       <section class="panel">
-        <h2 class="panel-title">订阅路径</h2>
-        <form class="inline-form" id="subscription-form" method="post" action="/subscription-path" data-ajax-form>
-          <label>
-            <span class="label">路径</span>
-            <input id="path-input" name="path" value="{{.SubscriptionPath}}" required/>
-          </label>
-          <button class="ghost" type="submit" name="submit_action" value="random">随机并保存</button>
-          <button class="primary" type="submit" name="submit_action" value="save">保存路径</button>
-        </form>
-      </section>
-
-      <section class="panel">
-        <h2 class="panel-title">sing-box 订阅设置</h2>
-        <form class="singbox-settings-form" id="singbox-settings-form" method="post" action="/singbox-settings" data-ajax-form>
-          <label>
-            <span class="label">运行模式</span>
-            <select id="singbox-mode" name="mode" required>
-              <option value="tun" {{if eq .SingBoxMode "tun"}}selected{{end}}>TUN / VPN（手机）</option>
-              <option value="mixed" {{if eq .SingBoxMode "mixed"}}selected{{end}}>Mixed 代理端口（桌面）</option>
-            </select>
-          </label>
-          <button class="primary" type="submit">保存设置</button>
-        </form>
-      </section>
-
-      <section class="panel">
-        <h2 class="panel-title">订阅连接</h2>
-        <form id="nodes-form" method="post" action="/nodes" data-ajax-form>
-          <label>
-            <span class="label">节点列表</span>
-            <textarea id="nodes-textarea" name="nodes" spellcheck="false">{{.NodesText}}</textarea>
-          </label>
-          <div class="footer-row">
-            <span class="muted">当前共 <span id="nodes-count">{{.NodeCount}}</span> 条连接</span>
-            <button class="primary" type="submit">保存连接</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel">
-        <div class="panel-heading">
-          <h2 class="panel-title">路由规则订阅</h2>
-          <button class="primary" id="open-new-route-rule" type="button">新增规则</button>
+        <h2 class="panel-title">配置管理</h2>
+        <div class="setting-row">
+          <div><h3>节点列表</h3><span class="muted">共 <span id="nodes-count">{{.NodeCount}}</span> 条连接</span></div>
+          <button class="ghost" type="button" data-open-dialog="nodes-dialog">编辑节点</button>
         </div>
+        <div class="setting-row">
+          <div><h3>sing-box 模板</h3><span class="muted">SQLite</span></div>
+          <button class="ghost" id="open-singbox-template" type="button">编辑模板</button>
+        </div>
+        <div class="setting-row">
+          <div><h3>订阅路径</h3><code class="value" id="subscription-path">{{.SubscriptionPath}}</code></div>
+          <button class="ghost" type="button" data-open-dialog="subscription-dialog">修改路径</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading"><h2 class="panel-title">路由规则订阅</h2><button class="primary" id="open-new-route-rule" type="button">新增规则</button></div>
         <div class="route-rule-manager">
           <div class="route-rule-controls">
-            <label class="route-rule-selector">
-              <span class="label">选择要查看或修改的规则（共 <span id="route-rules-count">{{len .RouteRules}}</span> 条）</span>
-              <select id="route-rule-select" {{if not .RouteRules}}disabled{{end}}>
-                {{range .RouteRules}}
-                  <option value="{{.ID}}">{{.Name}} - {{.Path}}</option>
-                {{else}}
-                  <option value="">暂无路由规则</option>
-                {{end}}
-              </select>
-            </label>
-            <form class="route-rule-delete-control" id="delete-route-rule-form" method="post" action="" data-ajax-form data-confirm="确认删除当前选中的路由规则？">
-              <button class="danger" id="delete-route-rule-button" type="submit" {{if not .RouteRules}}disabled{{end}}>删除所选规则</button>
-            </form>
+            <label class="route-rule-selector"><span class="label">选择规则（共 <span id="route-rules-count">{{len .RouteRules}}</span> 条）</span><select id="route-rule-select" {{if not .RouteRules}}disabled{{end}}>{{range .RouteRules}}<option value="{{.ID}}">{{.Name}} - {{.Path}}</option>{{else}}<option value="">暂无路由规则</option>{{end}}</select></label>
+            <form id="delete-route-rule-form" method="post" action="" data-ajax-form data-confirm="确认删除当前选中的路由规则？"><button class="danger" id="delete-route-rule-button" type="submit" {{if not .RouteRules}}disabled{{end}}>删除所选规则</button></form>
           </div>
-          <div id="route-rule-editor">
-            <p class="muted empty-state">还没有路由规则。</p>
-          </div>
+          <div id="route-rule-editor"><p class="muted empty-state">还没有路由规则。</p></div>
         </div>
         <div id="route-rules-data" data-rules="{{.RouteRulesData}}" hidden></div>
+        <details class="rule-path-details"><summary>全部规则路径</summary><ul class="value route-rule-paths" id="route-rule-paths">{{range .RouteRules}}<li><span class="muted">{{.Name}}</span><code>{{.Path}}</code></li>{{else}}<li class="muted">暂无路由规则</li>{{end}}</ul></details>
       </section>
+      <footer class="service-footer"><span>管理员 {{.Settings.Admin}}</span><span>gosub</span></footer>
+
+      <dialog class="modal" id="subscription-dialog" aria-labelledby="subscription-dialog-title">
+        <div class="modal-header"><h2 class="modal-title" id="subscription-dialog-title">订阅路径</h2><button class="icon-button" type="button" data-close-dialog aria-label="关闭" title="关闭">&times;</button></div>
+        <form class="form-grid" id="subscription-form" method="post" action="/subscription-path" data-ajax-form>
+          <label><span class="label">路径</span><input id="path-input" name="path" value="{{.SubscriptionPath}}" required/></label>
+          <div class="modal-footer"><button class="ghost" type="submit" name="submit_action" value="random">随机并保存</button><button class="primary" type="submit" name="submit_action" value="save">保存路径</button></div>
+        </form>
+      </dialog>
+
+      <dialog class="modal editor-dialog" id="nodes-dialog" aria-labelledby="nodes-dialog-title">
+        <div class="modal-header"><h2 class="modal-title" id="nodes-dialog-title">节点列表</h2><button class="icon-button" type="button" data-close-dialog aria-label="关闭" title="关闭">&times;</button></div>
+        <form class="form-grid" id="nodes-form" method="post" action="/nodes" data-ajax-form>
+          <label><span class="label">分享链接</span><textarea id="nodes-textarea" name="nodes" spellcheck="false">{{.NodesText}}</textarea></label>
+          <div class="modal-footer"><button class="ghost" type="button" data-close-dialog>取消</button><button class="primary" type="submit">保存连接</button></div>
+        </form>
+      </dialog>
+
+      <dialog class="modal editor-dialog template-dialog" id="singbox-template-dialog" aria-labelledby="singbox-template-title">
+        <div class="modal-header"><div><h2 class="modal-title" id="singbox-template-title">sing-box 配置模板</h2><span class="muted">SQLite</span></div><button class="icon-button" type="button" data-close-dialog aria-label="关闭" title="关闭">&times;</button></div>
+        <div class="template-toolbar">
+          <label><span class="label">本地预设</span><select id="singbox-preset"><option value="tun">TUN / VPN</option><option value="mixed">Mixed 代理端口</option></select></label>
+          <button class="ghost" id="load-singbox-preset" type="button" disabled>载入预设</button>
+          <a class="text-link" href="https://sing-box.sagernet.org/configuration/" target="_blank" rel="noopener noreferrer">官方配置文档</a>
+        </div>
+        <form class="form-grid" id="singbox-template-form" method="post" action="/singbox-template" data-ajax-form>
+          <label><span class="label">JSON 模板</span><textarea id="singbox-template-textarea" name="template" spellcheck="false" required></textarea></label>
+          <p class="message error" id="singbox-template-error" role="alert" hidden></p>
+          <div class="modal-footer"><span class="muted" id="singbox-template-state">未载入</span><button class="ghost" type="button" data-close-dialog>取消</button><button class="primary" id="save-singbox-template" type="submit" disabled>保存模板</button></div>
+        </form>
+      </dialog>
 
       <dialog class="modal" id="new-route-rule-dialog" aria-labelledby="new-route-rule-title">
-        <div class="modal-header">
-          <h2 class="modal-title" id="new-route-rule-title">新增路由规则</h2>
-          <button class="icon-button" type="button" data-close-route-rule-dialog aria-label="关闭" title="关闭">&times;</button>
-        </div>
+        <div class="modal-header"><h2 class="modal-title" id="new-route-rule-title">新增路由规则</h2><button class="icon-button" type="button" data-close-route-rule-dialog aria-label="关闭" title="关闭">&times;</button></div>
         <form class="route-rule-form" id="new-route-rule-form" method="post" action="/route-rules" data-ajax-form>
-          <div class="route-rule-grid">
-            <label>
-              <span class="label">名称</span>
-              <input name="name" placeholder="留空时使用“路由规则”"/>
-            </label>
-            <label>
-              <span class="label">路径</span>
-              <input name="path" placeholder="随机新增时可留空"/>
-            </label>
-          </div>
-          <label>
-            <span class="label">JSON 内容</span>
-            <textarea name="content" spellcheck="false">{{.DefaultRouteJSON}}</textarea>
-          </label>
-          <div class="modal-footer">
-            <button class="ghost" type="button" data-close-route-rule-dialog>取消</button>
-            <button class="ghost" type="submit" name="submit_action" value="random">随机路径并新增</button>
-            <button class="primary" type="submit" name="submit_action" value="save">新增规则</button>
-          </div>
+          <div class="route-rule-grid"><label><span class="label">名称</span><input name="name" placeholder="留空时使用“路由规则”"/></label><label><span class="label">路径</span><input name="path" placeholder="随机新增时可留空"/></label></div>
+          <label><span class="label">JSON 内容</span><textarea name="content" spellcheck="false">{{.DefaultRouteJSON}}</textarea></label>
+          <div class="modal-footer"><button class="ghost" type="button" data-close-route-rule-dialog>取消</button><button class="ghost" type="submit" name="submit_action" value="random">随机路径并新增</button><button class="primary" type="submit" name="submit_action" value="save">新增规则</button></div>
         </form>
       </dialog>
     </main>

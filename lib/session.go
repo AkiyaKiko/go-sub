@@ -10,8 +10,9 @@ import (
 var sessionStore = NewMemoryStore(12 * time.Hour)
 
 type SessionData struct {
-	UserID    int64
-	ExpiresAt time.Time
+	UserID             int64
+	ExpiresAt          time.Time
+	CredentialsVersion [32]byte
 }
 
 type MemoryStore struct {

@@ -9,11 +9,11 @@ import zipfile
 
 
 def expected_members(binary_name):
-    if binary_name in ("", ".", "..", "config.example.json", "README.md") or any(
+    if binary_name in ("", ".", "..", "config.example.json", "singbox.template.example.json", "README.md") or any(
         character in binary_name for character in "/\\:"
     ):
         raise ValueError("binary name must be a plain file name")
-    return {binary_name: 0o755, "config.example.json": 0o644, "README.md": 0o644}
+    return {binary_name: 0o755, "config.example.json": 0o644, "singbox.template.example.json": 0o644, "README.md": 0o644}
 
 
 def create_archive(archive_path, binary_name, package_directory):
@@ -59,6 +59,8 @@ def verify_archive(archive_path, binary_name):
             members = archive.getmembers()
             check_names([member.name for member in members])
             for member in members:
+                if member.pax_headers:
+                    raise ValueError(f"unexpected extra metadata: {member.name}")
                 if not member.isreg():
                     raise ValueError(f"not a regular file: {member.name}")
                 if member.uid != 0 or member.gid != 0 or member.uname or member.gname:
@@ -94,8 +96,10 @@ def verify_extraction(archive_path):
         destination.mkdir(mode=0o700)
         config_path = destination / "config.json"
         database_path = destination / "gosub.db"
+        template_path = destination / "singbox.template.json"
         config_path.write_bytes(b"existing configuration\n")
         database_path.write_bytes(b"existing database\n")
+        template_path.write_bytes(b"existing subscription template\n")
         before = destination.stat()
         if archive_path.name.endswith(".tar.gz"):
             subprocess.run(["tar", "-xzf", str(archive_path), "-C", str(destination)], check=True)
@@ -111,6 +115,8 @@ def verify_extraction(archive_path):
             raise ValueError("extraction overwrote existing config.json")
         if database_path.read_bytes() != b"existing database\n":
             raise ValueError("extraction overwrote existing gosub.db")
+        if template_path.read_bytes() != b"existing subscription template\n":
+            raise ValueError("extraction overwrote existing singbox.template.json")
     return True
 
 

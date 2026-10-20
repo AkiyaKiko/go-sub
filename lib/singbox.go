@@ -17,7 +17,7 @@ import (
 	"unicode/utf8"
 )
 
-const SingBoxTemplateVersion = "tun-mixed-v3"
+const SingBoxTemplateVersion = "security-template-v6"
 const maxSingBoxNodes = 2048
 const maxShareURIBytes = 16384
 const maxSingBoxInputBytes = 4 * 1024 * 1024
@@ -80,6 +80,7 @@ type ConversionDiagnostic struct {
 }
 
 type ConversionReport struct {
+	TemplateHash  string                 `json:"template_hash,omitempty"`
 	Status        string                 `json:"status"`
 	Total         int                    `json:"total"`
 	Converted     int                    `json:"converted"`
@@ -186,6 +187,14 @@ func (err *shareError) Error() string { return err.message }
 func invalidShare(code, message string) error { return &shareError{code, message} }
 
 func BuildSingBoxConfig(nodes []string, options SingBoxOptions) ([]byte, ConversionReport) {
+	return buildSingBoxConfig(nodes, options, nil, false)
+}
+
+func BuildSingBoxConfigWithTemplate(nodes []string, options SingBoxOptions, template []byte) ([]byte, ConversionReport) {
+	return buildSingBoxConfig(nodes, options, template, true)
+}
+
+func buildSingBoxConfig(nodes []string, options SingBoxOptions, template []byte, custom bool) ([]byte, ConversionReport) {
 	report := ConversionReport{Status: "error", Diagnostics: []ConversionDiagnostic{}}
 	inputBytes := 0
 	for _, raw := range nodes {
@@ -198,18 +207,30 @@ func BuildSingBoxConfig(nodes []string, options SingBoxOptions) ([]byte, Convers
 		report.Status = "disabled"
 		return nil, report
 	}
-	options, err := NormalizeSingBoxOptions(options)
+	var err error
+	if !custom {
+		template, err = DefaultSingBoxTemplate(options)
+	}
+	var config map[string]any
+	if err == nil {
+		config, err = parseSingBoxTemplate(template)
+	}
 	if err != nil {
-		report.Diagnostics = append(report.Diagnostics, ConversionDiagnostic{Code: "INVALID_TEMPLATE", Status: "invalid", Message: "sing-box 模板设置无效"})
+		message := "sing-box 模板设置无效"
+		if problem, ok := err.(*shareError); ok {
+			message = problem.message
+		}
+		report.Diagnostics = append(report.Diagnostics, ConversionDiagnostic{Code: "INVALID_TEMPLATE", Status: "invalid", Message: message})
 		return nil, report
 	}
+	report.TemplateHash = singBoxTemplateHash(template)
 	if report.Total > maxSingBoxNodes || inputBytes > maxSingBoxInputBytes {
 		report.Failed = report.Total
 		report.Diagnostics = append(report.Diagnostics, ConversionDiagnostic{Code: "INPUT_LIMIT", Status: "invalid", Message: "sing-box 输入超过 2048 个节点或 4 MiB"})
 		return nil, report
 	}
 	var outbounds []singBoxOutbound
-	tags := map[string]bool{"proxy": true, "auto": true, "direct": true, "mixed-in": true, "tun-in": true}
+	tags, _ := templateTags(config)
 	for index, raw := range nodes {
 		raw = normalizeShareLine(raw)
 		if raw == "" {
@@ -271,52 +292,13 @@ func BuildSingBoxConfig(nodes []string, options SingBoxOptions) ([]byte, Convers
 	if report.Converted == 0 || (report.Failed > 0 && !options.AllowPartial) {
 		return nil, report
 	}
-	allTags := make([]string, len(outbounds))
-	for i, outbound := range outbounds {
-		allTags[i] = outbound.Tag
-	}
-	groups := []singBoxOutbound{
-		{Type: "selector", Tag: "proxy", Outbounds: append([]string{"auto", "direct"}, allTags...), Default: "auto"},
-		{Type: "urltest", Tag: "auto", Outbounds: allTags, URL: options.TestURL, Interval: options.TestInterval},
-		{Type: "direct", Tag: "direct"},
-	}
-	config := map[string]any{
-		"log":       map[string]any{"level": "warn"},
-		"inbounds":  []any{map[string]any{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": options.MixedPort}},
-		"outbounds": append(groups, outbounds...),
-		"route":     map[string]any{"final": "proxy"},
-	}
-	if options.Mode == "tun" {
-		config["inbounds"] = []any{map[string]any{
-			"type": "tun", "tag": "tun-in",
-			"address": []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
-			"mtu":     1500, "auto_route": true, "strict_route": true,
-		}}
-		// Bootstrap node hostnames directly; sending them through proxy DNS would recurse.
-		config["dns"] = map[string]any{
-			"servers": []any{
-				map[string]any{"type": "udp", "tag": "dns-bootstrap", "server": "223.5.5.5", "server_port": 53, "detour": "direct"},
-				map[string]any{
-					"type": "https", "tag": "dns-remote", "server": "1.1.1.1", "server_port": 443,
-					"path": "/dns-query", "detour": "proxy",
-					"tls": map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"},
-				},
-			},
-			"final": "dns-remote", "strategy": "prefer_ipv4", "independent_cache": true,
-		}
-		config["route"] = map[string]any{
-			"rules": []any{
-				map[string]any{"port": 53, "action": "hijack-dns"},
-				map[string]any{"action": "sniff"},
-			},
-			"auto_detect_interface": true, "default_domain_resolver": "dns-bootstrap", "final": "proxy",
-		}
-	}
-	if !options.DisableClashAPI {
-		config["experimental"] = map[string]any{"clash_api": map[string]any{"external_controller": net.JoinHostPort("127.0.0.1", strconv.Itoa(options.ClashPort))}}
-	}
-	body, err := json.MarshalIndent(config, "", "  ")
+	body, err := assembleSingBoxTemplate(config, outbounds)
 	if err != nil {
+		message := "模板组装失败"
+		if problem, ok := err.(*shareError); ok {
+			message = problem.message
+		}
+		report.Diagnostics = append(report.Diagnostics, ConversionDiagnostic{Code: "INVALID_TEMPLATE", Status: "invalid", Message: message})
 		return nil, report
 	}
 	report.Status = "ready"

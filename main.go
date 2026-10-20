@@ -26,12 +26,16 @@ func NewDefaultConfig() *lib.Config {
 	if err != nil {
 		log.Fatal(err)
 	}
+	password, err := lib.RandomString(32)
+	if err != nil {
+		log.Fatal(err)
+	}
 	return &lib.Config{
 		Settings: &lib.Settings{
 			Host:     "127.0.0.1",
 			Port:     8080,
 			Admin:    fmt.Sprintf("admin_%s", randomStr),
-			Password: fmt.Sprintf("password_%s", randomStr),
+			Password: password,
 			TLS:      &lib.TLSConfig{Enabled: false},
 		},
 	}
@@ -61,6 +65,11 @@ func InitializeRuntime() (*lib.Settings, string, bool) {
 	settings, err := lib.GetSettings()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if store, err := lib.DefaultStore(); err == nil {
+		if _, err := store.SingBoxTemplate(); err != nil {
+			log.Printf("sing-box 数据库模板初始化失败: %v", err)
+		}
 	}
 	// 获取订阅url路径
 	path, err := lib.GetSubscriptionPath()
@@ -118,17 +127,16 @@ func main() {
 }
 
 func printStartupInfo(settings *lib.Settings, path string, configCreated bool) {
-	webURL, subscriptionURL := startupURLs(settings, path)
+	webURL, _ := startupURLs(settings, path)
 	tlsEnabled := settings.TLS != nil && settings.TLS.Enabled
 
 	log.Println("GoSub 启动")
 	log.Printf("Web 地址=%s", webURL)
-	log.Printf("订阅地址=%s", subscriptionURL)
-	log.Printf("订阅路径=%s", path)
+	log.Print("订阅地址请登录管理后台查看")
 	log.Printf("监听地址=%s", net.JoinHostPort(settings.Host, fmt.Sprintf("%d", settings.Port)))
 	log.Printf("管理员=%s", settings.Admin)
 	if configCreated {
-		log.Printf("密码=%s", settings.Password)
+		log.Print("初始账号与密码已写入 config.json，请在本机查看")
 	} else {
 		log.Print("密码=(hidden)")
 	}
